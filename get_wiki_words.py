@@ -44,8 +44,17 @@ def get_words():
         words.extend(get_words_page(link))
     return words
 
-# words = get_words()
+
+def delete_duplicates(words):
+    return list(dict.fromkeys(words))
+
+
 with open(OUT_FILENAME, 'w', encoding='utf-8') as out_f:
     words = get_words()
+    print(f"Before removing duplicates: {len(words)}")
+    words = delete_duplicates(words)
+    print(f"After removing duplicates: {len(words)}")
+
+
     out_f.write('\n'.join(words))
 
