@@ -17,37 +17,23 @@ words = ("и", "в")
 
 Translation = Dict[str, Union[str, Tag]]
 
+
 def get_word_transl(word: str) -> Dict[str, Union[str, List[Translation]]]:
     session = requests.session()
     link = sakha_link + requests.utils.quote(word)
     response = session.get(link, headers=HEADERS)
 
-    if response.status_code == 200:
-        print(f"Successfully loaded `{sakha_link+word}`")
-    else:
+    if response.status_code != 200:
         raise ValueError("Something went wrong while getting result")
 
-    words = []
-
     soup = BeautifulSoup(response.text, 'lxml')
-
     # NEW: delete linebreaks
     for linebreak in soup.find_all('br'):
         linebreak.extract()
 
-    # # найти <div> в котором
-    # transl_headers = soup.find_all('h2')
-    # if not any(header.string == 'Русский → Якутский'
-    #            for header in transl_headers):
-    #     comment = (f"нет русского перевода. "
-    #                f"есть переводы `{','.join(transl_headers)}`")
-    #     print(comment)
-    #     return ... # TODO
     # достать тэг `<h2>Русский → Якутский</h2>` и смотреть его сестёр дальше
-    #   пока не попадём на очередной <h2> (или `ещё переводы`)
-    Translation = Dict[str, Union[str, Tag]]
+    #   пока не попадём на очередной <h2> (или `<p>ещё переводы</p>`)
     translation_tags: List[Translation] = []
-    res: Dict[str, Union[str, List[Translation]]]
     comment = ''
 
     transl_header = soup.find_all('h2', string="Русский → Якутский")
@@ -72,9 +58,11 @@ def get_word_transl(word: str) -> Dict[str, Union[str, List[Translation]]]:
             rus_word_or_phrase = tag.h3.string.strip()
             translation = tag.find('div', class_='article-text')
             try:
-                lexical_category = tag.find('div', class_='article-category').string
+                lexical_category = tag.find(
+                    'div', class_='article-category').string.split(': ')[1]
             except (AttributeError) as e:
                 lexical_category = ''
+
             word_or_phrase_res = dict(
                 rus=rus_word_or_phrase, translation=translation,
                 lexical_category=lexical_category)
@@ -85,7 +73,7 @@ def get_word_transl(word: str) -> Dict[str, Union[str, List[Translation]]]:
     return res
 
 
-def rec_parse_translation(par, transl_sep=' : '):
+def rec_parse_translation(par, transl_sep=' : ', examples_sep='|'):
     res = []
 
     def is_sense_in_rus(tag):
@@ -97,21 +85,34 @@ def rec_parse_translation(par, transl_sep=' : '):
         translation = ' '.join(par.stripped_strings)
         res.append(dict(sense='', translation=translation, example=''))
 
+    prev_sibling_type = ''
+    # пройти по найденным русским лексемам / фразам и получить для них
+    #   перевод и примеры
     for sense in senses:
         translation = sense.next_sibling
         example_parts = []
+
         for sibling in translation.next_siblings:
             if sibling.name == 'em':
                 if sibling not in senses:
-                    example_parts.append(sibling.string.strip().split(';')[0])
+                    # бывает, что пример (или перевод? TODO понять!)
+                    #   даётся сразу рядом тоже в `<em>`, `в`: https://sakhatyla.ru/translate?q=%D0%B2
+                    example_parts.append(
+                        sibling.string.strip().split(';')[0] + examples_sep)
+                    break
                 else:
                     break
             elif sibling.name == 'strong':
                 if sibling.string in [
                   'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']:
+                    # номер значения (ср. `в`: https://sakhatyla.ru/translate?q=%D0%B2)
                     continue
                 else:
-                    example_parts.append(sibling.string.strip() + transl_sep)
+                    # добавим перед этой русской фразой разделитель переводов,
+                    #   на случай если это не первая переводимая фраза
+                    #   позже уберём лишнее strip
+                    example_parts.append(examples_sep + ' '
+                                         + sibling.string.strip() + transl_sep)
             elif isinstance(sibling, NavigableString):
                 # `; ` is likelier to be translation end, but it's irregular
                 #   and `;` could capture more so..
@@ -121,7 +122,11 @@ def rec_parse_translation(par, transl_sep=' : '):
             else:
                 print(f"Unexpected tag in `p`: {sibling}")
         translation = translation.strip().strip(';')
-        example = ' '.join(example_parts)
+        # либо слеплять пробелом пример с уже расставленными знаками
+        #   (` : ` (`transl_sep`) между русским и якутским,
+        #   `|` (examples_sep) между примерами
+        #   и тогда слеплять пробелом, либо
+        example = ' '.join(example_parts).strip(examples_sep)
 
         translations.append(translation)
         examples.append(example)
@@ -131,34 +136,78 @@ def rec_parse_translation(par, transl_sep=' : '):
     for i in range(len(senses)):
         res.append(dict(sense=senses[i].string, translation=translations[i],
                         example=examples[i]))
+
+    # чаще всего самое первое выделенное русское слово - грам. сведения о русском
+    #   переводимом слове, чтобы лучше понять перевод. TODO: их можно хранить отдельно
+    # TODO: удалять совсем те вхождения где нет примеров и перевод типа "1."
+    # first_sense = res[0]['sense']
+
     return res
 
 
-def parse_translation(translation: Translation):
-    pars = translation.get('translation').find_all('p', recursive=False)
-    ru_gram_info, ru_gram_info2 = '', ''
+def parse_translation(translation: Translation) -> List[Dict[str, str]]:
+    # найти все разделы перевода. обычно он один, но бывает несколько
+    #   (`к`: https://sakhatyla.ru/translate?q=%D0%BA)
+    pars = translation.pop('translation').find_all('p', recursive=False)
+    rus = translation.get('rus')
+    lexical_category = translation.get('lexical_category')
 
+    res = []
     for par in pars:
         children_tags = par.contents
-        res = rec_parse_translation(par)
+        par_res = rec_parse_translation(par)
+        res.extend(par_res)
         print(f"Parsed paragraph\n\t`{par}`")
-        print(res)
+        print(par_res)
 
-        # for children_tag in children_tags:
-        #     print(children_tag.name, children_tag)
+    for res_ in res:
+        res_.update(translation)
 
-        # if children_tags[0].name == 'em':
-        #     ru_gram_info = children_tags[0]
-        # else:
-        #     print(f"First element in `<p>` isn't `<em>`: {children_tags[0]}")
+    return res
 
 
-res = get_word_transl('в')
-print(res)
+def get_word_data(word: str):
+    general_info_translations = get_word_transl(word)
+    print(general_info_translations)
 
-for res_ in res['translations']:
-    parse_translation(res_)
+    entries = []
+    for translations in general_info_translations.pop('translations'):
+        entry_data = parse_translation(translations)
+        entries.extend(entry_data)
 
-# with open('translations.csv', 'w', newline='') as csvout:
-#     fieldnames = ['lexeme', 'word_phrase_rus', 'transl', 'comment', 'link']:
-#     writer = csv.DictWriter(csvout, fieldnames=fieldnames)
+    # добавить общую информацию к каждому слову для записи позже в csv
+    for entry_dict in entries:
+        entry_dict.update(general_info_translations)
+
+    return entries
+
+# res = get_word_transl('в')
+# print(res)
+#
+# results = []
+# for translations in res['translations']:
+#     entry_data = parse_translation(translations)
+
+def write_to_csv(entries):
+    with open('translations.csv', 'w', encoding='utf-8', newline='') as csvout:
+        fieldnames = ['word', 'rus', 'sense', 'translation', 'example',
+                      'lexical_category', 'comment', 'link']
+        writer = csv.DictWriter(csvout, fieldnames=fieldnames)
+
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(entry)
+
+
+with open('ru_words.txt', 'r', encoding='utf-8') as f:
+    words = [next(f).strip() for i in range(7)]
+
+entries = []
+for word in words:
+    entry = get_word_data(word)
+    entries.extend(entry)
+
+# entries = get_word_data('в')
+# entries += get_word_data('к')
+print(words, entries)
+write_to_csv(entries)
