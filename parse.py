@@ -198,14 +198,17 @@ def write_to_csv(entries):
         for entry in entries:
             writer.writerow(entry)
 
-
+N = 50
 with open('ru_words.txt', 'r', encoding='utf-8') as f:
-    words = [next(f).strip() for i in range(7)]
+    words = [next(f).strip() for i in range(N)]
 
 entries = []
 for word in words:
-    entry = get_word_data(word)
-    entries.extend(entry)
+    try:
+        entry = get_word_data(word)
+        entries.extend(entry)
+    except (AttributeError, ValueError) as e:
+        print(e)
 
 # entries = get_word_data('в')
 # entries += get_word_data('к')
