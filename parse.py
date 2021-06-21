@@ -190,18 +190,20 @@ def get_word_data(word: str):
 #     entry_data = parse_translation(translations)
 
 
-def write_to_csv(entries, filename='translations{}.csv'):
+def write_to_csv(entries, filename='translations_{}.csv'):
     if not Path(filename.format('')).exists:
         filename = filename.format('')
     else:
         maxind=-1
-        for file in sorted(Path('.').glob('translations*.csv')):
-            ind = int(file.stem.lstrip('translations'))
+        for file in sorted(Path('.').glob('translations_?*.csv')):
+            ind = int(file.stem.lstrip('translations_'))
             if ind > maxind:
                 maxind = ind
+        if maxind == -1:
+            maxind = 0
         filename = filename.format(maxind+1)
 
-    with open('translations.csv', 'w', encoding='utf-8', newline='') as csvout:
+    with open(filename, 'w', encoding='utf-8', newline='') as csvout:
         # TODO: add field for index of (possibly multirow) article on the page)
         fieldnames = ['word', 'rus', 'sense', 'translation', 'example',
                       'lexical_category', 'comment', 'link']
