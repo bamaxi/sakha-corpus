@@ -1,6 +1,7 @@
 from typing import List, Dict, Union
 import csv
 import re
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -188,7 +189,17 @@ def get_word_data(word: str):
 # for translations in res['translations']:
 #     entry_data = parse_translation(translations)
 
-def write_to_csv(entries):
+def write_to_csv(entries, filename='translations{}.csv'):
+    if not Path(filename.format('')).exists:
+        filename = filename.format('')
+    else:
+        maxind=-1
+        for file in sorted(Path('.').glob('translations*.csv')):
+            ind = int(file.stem.lstrip('translations'))
+            if ind > maxind:
+                maxind = ind
+        filename = filename.format(maxind+1)
+
     with open('translations.csv', 'w', encoding='utf-8', newline='') as csvout:
         fieldnames = ['word', 'rus', 'sense', 'translation', 'example',
                       'lexical_category', 'comment', 'link']
@@ -198,7 +209,8 @@ def write_to_csv(entries):
         for entry in entries:
             writer.writerow(entry)
 
-N = 50
+
+N = 2
 with open('ru_words.txt', 'r', encoding='utf-8') as f:
     words = [next(f).strip() for i in range(N)]
 
