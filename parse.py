@@ -7,7 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from bs4 import NavigableString, Tag
 
-from utils import HEADERS
+from utils import HEADERS, write_to_csv
 
 sakha_link = "https://sakhatyla.ru/" + "translate?q="
 
@@ -188,31 +188,6 @@ def get_word_data(word: str):
 # results = []
 # for translations in res['translations']:
 #     entry_data = parse_translation(translations)
-
-
-def write_to_csv(entries, filename='translations_{}.csv'):
-    if not Path(filename.format('')).exists:
-        filename = filename.format('')
-    else:
-        maxind=-1
-        for file in sorted(Path('.').glob('translations_?*.csv')):
-            ind = int(file.stem.lstrip('translations_'))
-            if ind > maxind:
-                maxind = ind
-        if maxind == -1:
-            maxind = 0
-        filename = filename.format(maxind+1)
-
-    with open(filename, 'w', encoding='utf-8', newline='') as csvout:
-        # TODO: add field for index of (possibly multirow) article on the page)
-        fieldnames = ['word', 'rus', 'sense', 'translation', 'example',
-                      'lexical_category', 'comment', 'link']
-        writer = csv.DictWriter(csvout, fieldnames=fieldnames)
-
-        writer.writeheader()
-        for entry in entries:
-            writer.writerow(entry)
-
 
 N = 2
 with open('ru_words.txt', 'r', encoding='utf-8') as f:
