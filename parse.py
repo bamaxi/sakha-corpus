@@ -189,6 +189,7 @@ def get_word_data(word: str):
 # for translations in res['translations']:
 #     entry_data = parse_translation(translations)
 
+
 def write_to_csv(entries, filename='translations{}.csv'):
     if not Path(filename.format('')).exists:
         filename = filename.format('')
@@ -201,6 +202,7 @@ def write_to_csv(entries, filename='translations{}.csv'):
         filename = filename.format(maxind+1)
 
     with open('translations.csv', 'w', encoding='utf-8', newline='') as csvout:
+        # TODO: add field for index of (possibly multirow) article on the page)
         fieldnames = ['word', 'rus', 'sense', 'translation', 'example',
                       'lexical_category', 'comment', 'link']
         writer = csv.DictWriter(csvout, fieldnames=fieldnames)
