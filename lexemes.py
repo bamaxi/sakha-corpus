@@ -3,27 +3,37 @@ import re
 from bs4 import NavigableString, Tag
 
 
-def flatten_tag(tag):
+def flatten_soup_tag(tag):
     out = []
     if tag.name is None:  # we have a NavigableString instance
         print(f"current tag is:\n{tag}\nthis is a string\n\n")
-        return [str(tag)]
+        return [{"basic_type": "string", "value": str(tag)}]
     else:
         print(f"current tag is:\n{tag}\nthis is a tag. diving into descendants\n\n")
         tag_name = tag.name
-        out.append(f"<{tag_name}>")
+        out.append({"basic_type": "tag", "kind": "opening", "value": f"{str(tag_name)}"})
         print(f"added opening tag {tag_name} at index {len(out)}")
 
-        i=0
+        i = 0
         for i, subtag in enumerate(tag.children):
-            out.extend(flatten_tag(subtag))
+            out.extend(flatten_soup_tag(subtag))
 
         print(f"added {i+1} descendants of {tag_name}")
         if not tag_name == "br":
-            out.append(f"</{tag_name}>")
+            out.append({"basic_type": "tag", "kind": "closing", "value": f"{str(tag_name)}"})
         print(f"added closing tag {tag_name} at index {len(out)}")
 
         return out
+
+
+def tag_dict_to_str(tag):
+    tag_kind_to_str = {'closing': '/', 'opening': ''}
+    if tag['basic_type'] == 'string':
+        return tag['value']
+    elif tag['basic_type'] == 'tag':
+        return f"<{tag_kind_to_str[tag['kind']]}{tag['value']}>"
+    else:
+        raise ValueError(f"Incorrect tag dict: `{str(tag)}`")
 
 
 class InputStream:
@@ -33,49 +43,71 @@ class InputStream:
     """
     def __init__(self, inp):
         self.pos, self.line, self.col = 0, 1, 0
+
         self.inp = inp
-        self.flat_inp = flatten_tag(inp)
+        self.flat_inp = flatten_soup_tag(inp)
+        self.flat_list_pos = 0
+
+        self.is_cur_inp_type_tag = True
 
     def next(self):
-        try:
-            # this indexing is interpreted as key check in 'attrs'
-            #   so KeyError is used below. TODO: May not be robust
-            try:
-                ch_or_tag = self.inp[self.pos]
-                self.pos += 1
-                if ch_or_tag == "\n":
-                    self.line += 1
-                    self.col = 0
-                else:
-                    self.col += 1
-            except (IndexError) as e:
-                # TODO: closing tag should be added here
-                ch_or_tag = self.inp.next_elements[self.pos]
-                self.pos += 1
+        """
 
-        except (KeyError) as e:
-            ch_or_tag = self.inp.next_elements[self.pos]
-            self.pos += 1
-            # # to add closing tags to parsing we save the next tag and then check later
-            # if self.elements_after_cur_tag:
-            #     self.elements_after_cur_tag[0] == ch_or_tag
-        return str(ch_or_tag)
+        :return: next whole tag or symbol in string
+        """
+        # TODO: what to return, dict or string? depends on tokenizer
+        if self.is_cur_inp_type_tag:
+            self.pos = 0
+
+            ch_or_tag = self.flat_inp[self.flat_list_pos]['value']
+            self.flat_list_pos += 1
+
+            if self.flat_inp[self.flat_list_pos]['basic_type'] == 'string':
+                self.is_cur_inp_type_tag = False
+
+        else:
+            try:
+                ch_or_tag = self.flat_inp[self.flat_list_pos]['value'][self.pos]
+                self.pos += 1
+            except IndexError as e:
+                # the string has ended, so we move to the next element
+                self.flat_list_pos += 1
+                self.pos = 0
+
+                next_el = self.flat_inp[self.flat_list_pos]
+                if next_el['basic_type'] == 'tag':
+                    self.is_cur_inp_type_tag = True
+                    ch_or_tag = next_el['value']
+
+                    self.flat_list_pos += 1
+
+                elif next_el['basic_type'] == 'string':
+                    # TODO: this may be an impossible route actually
+                    self.is_cur_inp_type_tag = False
+                    self.pos = 0
+                    ch_or_tag = next_el['value'][self.pos]
+                else:
+                    self.croak("Basic type not supported")
+
+        if (ch_or_tag in ('<br>', '<br/>', '<br />')
+                or ch_or_tag == '\n'):
+            self.line += 1
+            self.col = 0
+        else:
+            self.col += len(ch_or_tag)
+
+        return ch_or_tag
 
     def peek(self):
-        try:
-            # this indexing is interpreted as key check in 'attrs'
-            #   so KeyError is used below. TODO: May not be robust
-            ch_or_tag = self.inp[self.pos]
-        except (KeyError) as e:
-            ch_or_tag = self.inp.next_elements[self.pos]
-
-        return str(ch_or_tag)
+        pass
 
     def eof(self):
         # TODO: rework
         return self.peek().next_sibling is None
 
     def croak(self, msg):
+        # note: positions are presented as they are in output of `lxml` parser
+        #   this isn't necessarily the same as in browser DOM
         raise ValueError(msg + " (" + str(self.line) + ":" + str(self.col) + ")")
 
 
@@ -84,15 +116,18 @@ def _get_rus_alphabet(file="ru_alphabet.txt"):
         letters = frozenset(f.read().split())
     return letters
 
+
 def _get_sakha_alphabet(file="sa_alphabet.txt"):
     with open(file, 'r', encoding='utf-8') as f:
         letters = frozenset(f.read().split())
     return letters
 
+
 def _get_sakhaonly_letters(file="sa_uniquealphabet.txt"):
     with open(file, 'r', encoding='utf-8') as f:
         letters = frozenset(f.read().split())
     return letters
+
 
 SAKHA_ALPHABET = _get_sakha_alphabet()
 SAKHAONLY_LETTERS = _get_sakhaonly_letters()
