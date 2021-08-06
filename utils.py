@@ -37,3 +37,27 @@ def write_to_csv(entries, filename='translations_{}.csv'):
         writer.writeheader()
         for entry in entries:
             writer.writerow(entry)
+
+
+def _get_rus_alphabet(file="ru_alphabet.txt"):
+    with open(file, 'r', encoding='utf-8') as f:
+        letters = frozenset(f.read().split())
+    return letters
+
+
+def _get_sakha_alphabet(file="sa_alphabet.txt"):
+    with open(file, 'r', encoding='utf-8') as f:
+        letters = frozenset(f.read().split())
+    return letters
+
+
+def _get_sakhaonly_letters(file="sa_uniquealphabet.txt"):
+    with open(file, 'r', encoding='utf-8') as f:
+        letters = frozenset(f.read().split())
+    return letters
+
+
+SAKHA_ALPHABET = _get_sakha_alphabet()
+SAKHAONLY_LETTERS = _get_sakhaonly_letters()
+RUS_ALPHABET = _get_rus_alphabet()
+# there are no RUSONLY_LETTERS, Sakha alphabet uses whole Russian alphabet + 5 unique
