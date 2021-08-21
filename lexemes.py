@@ -1,7 +1,7 @@
 import re
 import logging
 import logging.config  # TODO: will have to be defined in main module in the future
-from functools import partial
+from functools import partial, wraps
 from typing import Union, Dict, Callable
 
 from bs4 import NavigableString, Tag
@@ -55,9 +55,7 @@ class InputStream:
         self.flat_list_pos = 0
 
         # append sentinel value
-        self.eof_tag_value = '%EOF%'
-        self.flat_inp.append(
-            dict(basic_type='sentinel', value=self.eof_tag_value))
+        self.flat_inp.append(dict(basic_type='sentinel'))
 
     def next(self):
         """
@@ -92,7 +90,7 @@ class InputStream:
                     self.croak("Basic type not supported")
 
         elif next_el['basic_type'] == 'sentinel':
-            ch_or_tag = next_el['value']
+            ch_or_tag = None
         else:
             self.croak("Unknown basic type")
 
@@ -100,7 +98,7 @@ class InputStream:
                 or ch_or_tag == '\n'):
             self.line += 1
             self.col = 0
-        elif ch_or_tag != self.eof_tag_value:
+        elif ch_or_tag is not None:
             self.col += len(ch_or_tag)
 
         return ch_or_tag
@@ -127,14 +125,14 @@ class InputStream:
                     self.croak("Basic type not supported")
 
         elif cur_el['basic_type'] == 'sentinel':
-            ch_or_tag = cur_el['value']
+            ch_or_tag = None
         else:
             self.croak("Unknown basic type")
 
         return ch_or_tag
 
     def eof(self):
-        return self.peek() == self.eof_tag_value
+        return self.peek() is None
 
     def croak(self, msg):
         # note: positions are presented as they are in output of `lxml` parser
@@ -154,14 +152,62 @@ def compose_predicate(subpredicates, type='and'):
 
     def predicate(inp):
         return composition(subpredicate(inp) for subpredicate in subpredicates)
+
     return predicate
 
 
+def make_read_next_skip_space_glob(func):
+    print("inside decorator")
+
+    @wraps(func)
+    def wrapped_read_next(self):
+        print(f"inside wrapped")
+        self.read_while(self.is_whitespace)
+        return func(self)
+
+    return wrapped_read_next
+
+
 class TokenStream:
-    def __init__(self, inp: InputStream):
+    """
+    reads input characters (and tags) one by one and forms tokens
+    tokens are of one of the following types:
+      newline:
+        kind='br','\n'
+      whitespace:
+        kind=' ', '\t'
+      tag:
+        kind='<','</'
+      arabic_number
+        1, 16, 53
+      roman_number
+        I, II, X
+      word
+      punct
+    """
+    def __init__(self, inp: InputStream, skip_space=True):
         self.inp = inp
         self.unknown = object()
         self.current = None
+        self.skip_space=skip_space
+
+        if self.skip_space:
+            self.read_next = self.read_next_skip_space
+        else:
+            self.read_next = self.read_next_keep_space
+
+    def make_read_next_skip_space(func):
+        @wraps(func)
+        def wrapped_read_next(self):
+            self.read_while(self.is_whitespace)
+            return func(self)
+        return wrapped_read_next
+
+    @make_read_next_skip_space
+    def read_next_skip_space(self):
+        return self.read_next_keep_space()
+
+    make_read_next_skip_space = staticmethod(make_read_next_skip_space)
 
     @staticmethod
     def is_sakha_only(ch):
@@ -180,13 +226,13 @@ class TokenStream:
         return bool(word_regex.match(ch))
 
     @staticmethod
-    def is_whitespace(ch, re_whitespace=re.compile("[ \t]")):
+    def is_whitespace(ch):
         return ch in (' ', '\t')
 
     @staticmethod
     def is_punc(ch, excl='', incl=None):
         if not incl:
-            return ch in """!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""" and ch not in excl
+            return ch in """!"#$%&'()*+,-./:;<=>?@[]^_`{|}~\\""" and ch not in excl
         else:
             return ch in incl
 
@@ -210,29 +256,6 @@ class TokenStream:
             log.debug(f"arabic_number string `{string}` not matched fully by regex pattern")
             return dict(type='arabic_number', valid=False, value=string)
 
-    # def read_bracketed(self, start, end):
-    #     inp = self.inp
-    #
-    #     string = ''
-    #     first_char = inp.next()
-    #     if first_char != start:
-    #         log.debug(f"first_char of the string isn't start=`{start}`")
-    #         # TODO: to allow this or not?
-    #     while not inp.eof():
-    #         ch = inp.next()
-    #         if ch == end:
-    #             break
-    #         elif isinstance(ch, dict) and ch['basic_type'] == 'tag':
-    #             log.warning(f"encountered tag!")
-    #             break
-    #         else:
-    #             string += ch
-    #
-    #     return string
-    #
-    # def read_rus_comment(self):
-    #     return self.read_bracketed("(", ")")
-
     def read_roman_number(
         self, re_roman=re.compile(
             "^M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
@@ -253,28 +276,7 @@ class TokenStream:
         else:
             return dict(type='word', lang=0, value=string)
 
-    def read_russian(self):
-        # predicate = compose_predicate(
-        #     [
-        #         self.is_rus,
-        #         lambda ch: not self.is_sakha_only(ch),
-        #         partial(self.is_punc, excl=';'),
-        #         self.is_whitespace
-        #     ],
-        #     type='or'
-        # )
-        # string = self.read_while(predicate)
-
-        predicate = compose_predicate(
-            [
-                self.is_rus,
-                lambda ch: not self.is_sakha_only(ch),
-            ],
-        )
-        string = self.read_while(predicate)
-        return dict(type='word', value='string', lang='pos_russian')
-
-    def read_next(self):
+    def read_next_keep_space(self):
         inp = self.inp
         if inp.eof():
             return None
@@ -317,10 +319,9 @@ class TokenStream:
                 return dict(type='newline', kind=inp.next())
             elif self.is_whitespace(ch_or_tag):
                 return dict(type='whitespace', kind=inp.next())
-            # elif ch_or_tag == '(':
-            #     return dict(type='string', value=self.read_bracketed('(', ')'))
             elif ch_or_tag == '=':  # affixes and clitics in Sakha are coded so
-                return dict(type='string', lang='sa',
+                # TODO: minor inconsistency: this word won't fit is_word_char
+                return dict(type='word', lang='sa',
                             value=inp.next()+self.read_while(str.isalpha))
             elif self.is_punc(ch_or_tag):
                 return dict(type='punc', value=inp.next())
@@ -347,3 +348,96 @@ class TokenStream:
         tok = self.current
         self.current = None
         return tok or self.read_next()
+
+    def eof(self):
+        return self.peek() is None
+
+    def croak(self, *args, **kwargs):
+        self.inp.croak(*args, **kwargs)
+
+
+class Parser:
+    def __init__(self, inp: TokenStream):
+        self.inp = inp
+        self._tok_type_to_method = dict(
+            whitespace=self.is_whitespace, tag=self.is_tag,
+            number=self.is_number
+        )
+
+    def is_whitespace(self):
+        tok = self.inp.peek()
+        return bool(tok) and tok['type'] == 'whitespace'
+
+    def is_number(self, kind='arabic'):
+        tok = self.inp.peek()
+        return bool(tok) and tok['type'] == f"{kind}_number"
+
+    def is_tag(self, tag_value, tag_kind):
+        tok = self.inp.peek()
+        return (bool(tok) and tok['type'] == 'tag' and tok['value'] == tag_value
+                and (not tag_kind or tok['kind'] == tag_kind))
+
+    def is_tok(self, desired_tok):
+        tok_type = desired_tok['type']
+        if tok_type in ('tag', 'number'):
+            self._tok_type_to_method[tok_type](
+                desired_tok['value'], desired_tok.get('kind')
+            )
+        else:
+            self._tok_type_to_method[tok_type]()
+
+    def skip_whitespace(self):
+        if self.is_whitespace():
+            self.inp.next()
+        else:
+            self.inp.croak(f"Expecting whitespace")
+
+    def skip_number(self, kind='arabic'):
+        if self.is_number(kind):
+            self.inp.next()
+        else:
+            self.inp.croak(f"Expecting number")
+
+    def skip_tag(self, tag_value, tag_kind=None):
+        if self.is_tag(tag_value, tag_kind):
+            self.inp.next()
+        else:
+            self.inp.croak(f"Expecting tag {tag_kind}{tag_value}>")
+
+    def skip_tok(self, desired_tok):
+        if self.is_tok(desired_tok):
+            self.inp.next()
+        else:
+            self.inp.croak(f"Expecting token {desired_tok}")
+
+    def delimited(self, start, stop, parser):
+        inp = self.inp
+
+        a = []
+        self.skip_tok(start)
+        while not inp.eof():
+            if self.is_tok(stop):
+                break
+            a.append(parser())
+        self.skip_tok(stop)
+        return a
+
+    # def parse_gram_info(self):
+    #     self.skip_tag('em', '<')
+    #
+    # def parse_numbered_sense(self):
+    #     inp = self.inp
+    #     self.skip_number()
+    #     self.skip_whitespace()
+    #     self.parse_gram_info()
+
+
+    # def parse_sa_entry(self):
+
+    def parse_entry(self):
+        """parses <div> - the whole lexeme entry"""
+        inp = self.inp
+        entry = []
+        while not inp.eof() and inp:  # and inp needed due to None instead of whitespace in
+            entry.append(self.parse_sa_entry())
+        return dict(type='entry', entry=entry)
