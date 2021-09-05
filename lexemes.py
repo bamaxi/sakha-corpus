@@ -184,6 +184,7 @@ class TokenStream:
         I, II, X
       word
       punct
+    all have `value` field except whitespace and newline
     """
     def __init__(self, inp: InputStream, skip_space=True):
         self.inp = inp
@@ -361,30 +362,43 @@ class Parser:
         self.inp = inp
         self._tok_type_to_method = dict(
             whitespace=self.is_whitespace, tag=self.is_tag,
-            number=self.is_number
+            number=self.is_number, punc=self.is_punc,
+            word=self.is_word
         )
 
     def is_whitespace(self):
         tok = self.inp.peek()
         return bool(tok) and tok['type'] == 'whitespace'
 
-    def is_number(self, kind='arabic'):
+    def is_number(self, kind='arabic', value=None):
         tok = self.inp.peek()
-        return bool(tok) and tok['type'] == f"{kind}_number"
+        return (bool(tok) and tok['type'] == f"{kind}_number"
+                and (not value or tok['value']==value))
 
     def is_tag(self, tag_value, tag_kind):
         tok = self.inp.peek()
         return (bool(tok) and tok['type'] == 'tag' and tok['value'] == tag_value
                 and (not tag_kind or tok['kind'] == tag_kind))
 
+    def is_punc(self, value):
+        tok = self.inp.peek()
+        return (bool(tok) and tok['type'] == 'punc'
+                and (not value or tok['value'] == value))
+
+    def is_word(self):
+        tok = self.inp.peek()
+        return (bool(tok) and tok['type'] == 'word')
+
     def is_tok(self, desired_tok):
-        tok_type = desired_tok['type']
-        if tok_type in ('tag', 'number'):
-            self._tok_type_to_method[tok_type](
-                desired_tok['value'], desired_tok.get('kind')
-            )
-        else:
-            self._tok_type_to_method[tok_type]()
+        tok_type = desired_tok.pop('type')
+        # if tok_type in ('tag', 'number'):
+        #     self._tok_type_to_method[tok_type](
+        #         desired_tok['value'], desired_tok.get('kind')
+        #     )
+        # else:
+        #     self._tok_type_to_method[tok_type]()
+        return self._tok_type_to_method[tok_type](**desired_tok)
+
 
     def skip_whitespace(self):
         if self.is_whitespace():
@@ -403,6 +417,18 @@ class Parser:
             self.inp.next()
         else:
             self.inp.croak(f"Expecting tag {tag_kind}{tag_value}>")
+
+    def skip_punc(self, value):
+        if self.is_punc(value):
+            self.inp.next()
+        else:
+            self.inp.croak(f"Expecting punctuation `{value}`")
+
+    def skip_word(self):
+        if self.is_word():
+            self.inp.next()
+        else:
+            self.inp.croak(f"Expecting word")
 
     def skip_tok(self, desired_tok):
         if self.is_tok(desired_tok):
@@ -425,11 +451,90 @@ class Parser:
     # def parse_gram_info(self):
     #     self.skip_tag('em', '<')
     #
-    # def parse_numbered_sense(self):
-    #     inp = self.inp
-    #     self.skip_number()
-    #     self.skip_whitespace()
-    #     self.parse_gram_info()
+
+    def parse_words(self):
+        inp = self.inp
+        if self.is_tag('strong', '<'):
+            ru_example = []
+            self.skip_tag('strong', '<')
+            while not inp.eof():
+                if self.is_tag('strong', '</'):
+                    break
+                ru_example.append(self.skip_word())
+            self.skip_tag('strong', '</')
+            return dict(type='ru_example', body=ru_example)
+        else:
+            sah_ru_example = []
+            while not inp.eof():
+                sah_ru_example.append(self.skip_word())
+            return dict(type='sah_ru_example', body=sah_ru_example)
+
+
+    def parse_delimited(self, start, stop, separator, parser):
+        # TODO: whitespace will interfere!
+        a = []
+        first = True
+        if start:
+            self.skip_punc(start)
+        while not self.inp.eof():
+            if self.is_punc(stop):
+                break
+            if first:
+                first = False
+            else:
+                self.skip_punc(separator)
+            a.append(parser(self.inp))
+        self.skip_punc(stop)
+        return a
+
+
+
+    def parse_numbered_sense(self):
+        inp = self.inp
+        numbered_sense = []
+
+        self.skip_number()
+        self.skip_punc('.')
+        self.skip_whitespace()
+        if self.is_tag('em', '<'):
+            gram_desc = []
+            gram_desc_ru = []
+            self.skip_tag('em', '<')
+            while not inp.eof():
+                if self.is_tag('em', '</'):
+                    break
+                gram_desc_ru.append(inp.next())
+            self.skip_tag('em', '</')
+            gram_desc.append(dict(type='gram_desc_ru', body=gram_desc_ru))
+
+            if self.is_whitespace():
+                self.skip_whitespace()
+                sah_sense_translations = self.parse_delimited(
+                    None, ';', ',', lambda inp: inp.next()
+                )
+                gram_desc.append(
+                    dict(type='sah_sense_translations',
+                         translations=sah_sense_translations)
+                )
+
+            self.skip_whitespace()
+            self.parse_delimited()
+
+
+
+
+    def parse_atom(self):
+        inp = self.inp
+        tok = inp.peek()
+
+        if self.is_number(tok):
+            inp.next()
+            if self.is_punc(inp.peek(), '.'):
+                return self.parse_numbered_sense()
+            else:
+                self.inp.croak("Expected dot `.`")
+        elif:
+
 
 
     # def parse_sa_entry(self):
