@@ -1,6 +1,7 @@
 import re
 import logging
 import logging.config  # TODO: will have to be defined in main module in the future
+from collections.abc import MutableMapping
 from functools import partial, wraps
 from typing import Union, Dict, Callable
 
@@ -252,10 +253,16 @@ class TokenStream:
     def read_arabic_number(self, num_regex=re.compile('^[1-9][0-9]*$')):
         string = self.read_while(str.isdecimal)
         if num_regex.fullmatch(string):
-            return dict(type='arabic_number', valid=True, value=int(string))
+            tok = dict(type='arabic_number', valid=True, value=int(string))
         else:
             log.debug(f"arabic_number string `{string}` not matched fully by regex pattern")
-            return dict(type='arabic_number', valid=False, value=string)
+            tok = dict(type='arabic_number', valid=False, value=string)
+        if self.inp.peek() == '.':
+            log.debug(f"\tchecking dot")
+            # self.inp.next() # TODO: should dot be consumed here?
+            tok['dotted'] = True
+
+        return tok
 
     def read_roman_number(
         self, re_roman=re.compile(
@@ -264,6 +271,7 @@ class TokenStream:
         )
     ):
         string = self.read_while(self.is_roman)
+        # TODO: check correctness of dot appending
         if re_roman.fullmatch(string):
             return dict(type='roman_number', valid=True, value=string)
         else:
@@ -370,10 +378,11 @@ class Parser:
         tok = self.inp.peek()
         return bool(tok) and tok['type'] == 'whitespace'
 
-    def is_number(self, kind='arabic', value=None):
+    def is_number(self, kind='arabic', value=None, dotted=None):
         tok = self.inp.peek()
         return (bool(tok) and tok['type'] == f"{kind}_number"
-                and (not value or tok['value']==value))
+                and (not value or tok['value'] == value)
+                and (not dotted or tok.get('dotted') == dotted))
 
     def is_tag(self, tag_value, tag_kind):
         tok = self.inp.peek()
@@ -387,7 +396,7 @@ class Parser:
 
     def is_word(self):
         tok = self.inp.peek()
-        return (bool(tok) and tok['type'] == 'word')
+        return bool(tok) and tok['type'] == 'word'
 
     def is_tok(self, desired_tok):
         tok_type = desired_tok.pop('type')
@@ -398,7 +407,6 @@ class Parser:
         # else:
         #     self._tok_type_to_method[tok_type]()
         return self._tok_type_to_method[tok_type](**desired_tok)
-
 
     def skip_whitespace(self):
         if self.is_whitespace():
@@ -436,17 +444,17 @@ class Parser:
         else:
             self.inp.croak(f"Expecting token {desired_tok}")
 
-    def delimited(self, start, stop, parser):
-        inp = self.inp
-
-        a = []
-        self.skip_tok(start)
-        while not inp.eof():
-            if self.is_tok(stop):
-                break
-            a.append(parser())
-        self.skip_tok(stop)
-        return a
+    # def delimited(self, start, stop, parser):
+    #     inp = self.inp
+    #
+    #     a = []
+    #     self.skip_tok(start)
+    #     while not inp.eof():
+    #         if self.is_tok(stop):
+    #             break
+    #         a.append(parser())
+    #     self.skip_tok(stop)
+    #     return a
 
     # def parse_gram_info(self):
     #     self.skip_tag('em', '<')
@@ -469,33 +477,28 @@ class Parser:
                 sah_ru_example.append(self.skip_word())
             return dict(type='sah_ru_example', body=sah_ru_example)
 
-
     def parse_delimited(self, start, stop, separator, parser):
         # TODO: whitespace will interfere!
         a = []
         first = True
         if start:
-            self.skip_punc(start)
+            self.skip_tok(start)
         while not self.inp.eof():
-            if self.is_punc(stop):
+            if self.is_tok(stop):
                 break
             if first:
                 first = False
             else:
-                self.skip_punc(separator)
+                self.skip_tok(separator)
             a.append(parser(self.inp))
-        self.skip_punc(stop)
+        self.skip_tok(stop)
         return a
-
-
 
     def parse_numbered_sense(self):
         inp = self.inp
         numbered_sense = []
 
-        self.skip_number()
-        self.skip_punc('.')
-        self.skip_whitespace()
+        # self.skip_whitespace()
         if self.is_tag('em', '<'):
             gram_desc = []
             gram_desc_ru = []
@@ -507,8 +510,9 @@ class Parser:
             self.skip_tag('em', '</')
             gram_desc.append(dict(type='gram_desc_ru', body=gram_desc_ru))
 
-            if self.is_whitespace():
-                self.skip_whitespace()
+            # if self.is_whitespace():
+            if not self.is_punc(';'):
+                # self.skip_whitespace()
                 sah_sense_translations = self.parse_delimited(
                     None, ';', ',', lambda inp: inp.next()
                 )
@@ -517,23 +521,25 @@ class Parser:
                          translations=sah_sense_translations)
                 )
 
-            self.skip_whitespace()
-            self.parse_delimited()
+            # self.skip_whitespace()
+            # parse examples
+            # self.parse_delimited(None, '')
 
 
 
 
-    def parse_atom(self):
-        inp = self.inp
-        tok = inp.peek()
-
-        if self.is_number(tok):
-            inp.next()
-            if self.is_punc(inp.peek(), '.'):
-                return self.parse_numbered_sense()
-            else:
-                self.inp.croak("Expected dot `.`")
-        elif:
+    # def parse_atom(self):
+    #     inp = self.inp
+    #     tok = inp.peek()
+    #
+    #     if self.is_number(tok):
+    #         inp.next()
+    #         if self.is_punc('.'):
+    #             self.skip_punc('.')
+    #             return self.parse_numbered_sense()
+    #         else:
+    #             self.inp.croak("Expected dot `.`")
+    #     elif:
 
 
 
