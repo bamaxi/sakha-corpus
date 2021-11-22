@@ -498,7 +498,7 @@ class Parser:
         inp = self.inp
         numbered_sense = []
 
-        # self.skip_whitespace()
+        # gram_desc
         if self.is_tag('em', '<'):
             gram_desc = []
             gram_desc_ru = []
@@ -509,6 +509,9 @@ class Parser:
                 gram_desc_ru.append(inp.next())
             self.skip_tag('em', '</')
             gram_desc.append(dict(type='gram_desc_ru', body=gram_desc_ru))
+
+            # word translation
+
 
             # if self.is_whitespace():
             if not self.is_punc(';'):
@@ -525,9 +528,6 @@ class Parser:
             # parse examples
             # self.parse_delimited(None, '')
 
-
-
-
     # def parse_atom(self):
     #     inp = self.inp
     #     tok = inp.peek()
@@ -540,8 +540,6 @@ class Parser:
     #         else:
     #             self.inp.croak("Expected dot `.`")
     #     elif:
-
-
 
     # def parse_sa_entry(self):
 

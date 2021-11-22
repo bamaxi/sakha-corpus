@@ -1,6 +1,7 @@
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Tuple
 import csv
 import re
+import copy
 from pathlib import Path
 
 import requests
@@ -9,7 +10,8 @@ from bs4 import NavigableString, Tag
 
 from utils import HEADERS, write_to_csv
 
-sakha_link = "https://sakhatyla.ru/" + "translate?q="
+sakhatyla_site = "https://sakhatyla.ru/"
+sakha_link = sakhatyla_site + "translate?q="
 
 words = ("и", "в")
 
@@ -19,18 +21,35 @@ words = ("и", "в")
 Translation = Dict[str, Union[str, Tag]]
 
 
-def get_word_transl(word: str) -> Dict[str, Union[str, List[Translation]]]:
+def get_word_page(word: str) -> Tuple[str]:
     session = requests.session()
-    link = sakha_link + requests.utils.quote(word)
+    word_link = "translate?q=" + requests.utils.quote(word)
+    link = sakhatyla_site + word_link
     response = session.get(link, headers=HEADERS)
 
     if response.status_code != 200:
         raise ValueError("Something went wrong while getting result")
 
-    soup = BeautifulSoup(response.text, 'lxml')
-    # NEW: delete linebreaks
-    for linebreak in soup.find_all('br'):
-        linebreak.extract()
+    return response.text, link, word_link, word
+
+
+def save_page(page: str, word: str):
+    path = f"sakhatyla.ru/{word}"
+    with open(path, 'w', encoding='utf-8') as fout:
+        fout.write(page)
+
+
+def collect_transl_lexical_entries(word: str, link: str, path: Path = None) -> Dict[str, Union[str, List[Translation]]]:
+    if not path:
+        page, _, _, _ = get_word_page(word)
+    else:
+        with open(path, 'r', encoding = 'utf-8') as f:
+            page = f.read()
+
+    soup = BeautifulSoup(page, 'lxml')
+    # # NEW: delete linebreaks
+    # for linebreak in soup.find_all('br'):
+    #     linebreak.extract()
 
     # достать тэг `<h2>Русский → Якутский</h2>` и смотреть его сестёр дальше
     #   пока не попадём на очередной <h2> (или `<p>ещё переводы</p>`)
@@ -57,7 +76,11 @@ def get_word_transl(word: str) -> Dict[str, Union[str, List[Translation]]]:
         else:
             # TODO: сохранять все тэги или сразу убирать словосочетания?
             rus_word_or_phrase = tag.h3.string.strip()
-            translation = tag.find('div', class_='article-text')
+            translation = copy.copy(tag.find('div', class_='article-text'))
+
+            # add sentinel value to delimit
+            # TODO: may not be needed with copies?
+
             try:
                 lexical_category = tag.find(
                     'div', class_='article-category').string.split(': ')[1]
@@ -168,7 +191,7 @@ def parse_translation(translation: Translation) -> List[Dict[str, str]]:
 
 
 def get_word_data(word: str):
-    general_info_translations = get_word_transl(word)
+    general_info_translations = collect_transl_lexical_entries(word)
     print(general_info_translations)
 
     entries = []
@@ -182,26 +205,36 @@ def get_word_data(word: str):
 
     return entries
 
-# res = get_word_transl('в')
+# res = collect_transl_lexical_entries('в')
 # print(res)
 #
 # results = []
 # for translations in res['translations']:
 #     entry_data = parse_translation(translations)
 
-N = 2
-with open('ru_words.txt', 'r', encoding='utf-8') as f:
-    words = [next(f).strip() for i in range(N)]
+# N = 2
+# with open('ru_words.txt', 'r', encoding='utf-8') as f:
+#     words = [next(f).strip() for i in range(N)]
 
-entries = []
-for word in words:
-    try:
-        entry = get_word_data(word)
-        entries.extend(entry)
-    except (AttributeError, ValueError) as e:
-        print(e)
 
-# entries = get_word_data('в')
-# entries += get_word_data('к')
-print(words, entries)
-write_to_csv(entries)
+# with open('ru_words.txt', 'r', encoding='utf-8') as f:
+#     words = f.read().split('\n')
+
+
+# for word in words:
+#     page, link, word_link, word = get_word_page(word)
+#     save_page(page, word)
+
+#
+# entries = []
+# for word in words:
+#     try:
+#         entry = get_word_data(word)
+#         entries.extend(entry)
+#     except (AttributeError, ValueError) as e:
+#         print(e)
+#
+# # entries = get_word_data('в')
+# # entries += get_word_data('к')
+# print(words, entries)
+# write_to_csv(entries)
