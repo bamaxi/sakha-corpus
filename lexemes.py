@@ -382,6 +382,12 @@ class TokenStream:
         self.inp.croak(*args, **kwargs)
 
 
+def compose_predicates_or(*predicates):
+    def is_any():
+        return any(predicate() for predicate in predicates)
+    return is_any
+
+
 class Parser:
     def __init__(self, inp: TokenStream):
         self.inp = inp
@@ -407,7 +413,7 @@ class Parser:
                 and (not tag_value or tok['value'] == tag_value)
                 and (not tag_kind or tok['kind'] == tag_kind))
 
-    def is_punc(self, value):
+    def is_punc(self, value=None):
         tok = self.inp.peek()
         return (bool(tok) and tok['type'] == 'punc'
                 and (not value or tok['value'] == value))
@@ -444,7 +450,7 @@ class Parser:
         else:
             self.inp.croak(f"Expecting tag {tag_kind}{tag_value}>")
 
-    def skip_punc(self, value):
+    def skip_punc(self, value=None):
         if self.is_punc(value):
             self.inp.next()
         else:
@@ -508,7 +514,8 @@ class Parser:
         array = None
         # TODO: eventually it meets what is `stop` or `sep` at `delimited above`
         #     possible solution: if self.is_word() before reading
-        while not inp.eof():
+        # while not inp.eof():
+        while self.is_word() or self.is_tag('strong'):
             if self.is_tag('strong', '<'):
                 self.skip_tag('strong', '<')
                 if not open_tag:
@@ -533,33 +540,48 @@ class Parser:
             if self.is_word():
                 array.append(inp.next())
 
+        res = {"type":"example"}
         if ru_example and sa_example:
-            res = dict(ru_example=ru_example, sa_example=sa_example)
+            res.update(dict(ru_example=ru_example, sa_example=sa_example))
         elif not(ru_example or sa_example):
             if sa_ru_example:
-                res = dict(sa_ru_example=sa_ru_example)
+                res.update(dict(sa_ru_example=sa_ru_example))
             else:
-                inp.croak("No results to show")
+                # inp.croak("No results to show")
+                return None
 
-        return dict(type="example").update(res)
+        return res
 
-    def parse_delimited(self, start, stop, separator, parser):
+    def parse_delimited(self, start, separator, parser,
+                        stop_punc=None, stop_cond_func=None):
         # TODO: whitespace will interfere!
         a = []
         first = True
         if start:
             self.skip_punc(start)
         while not self.inp.eof():
-            if self.is_punc(stop):
+            # # in case passed argument is a function first clause should do
+            # if self.is_punc(stop):
+            #     break
+            if stop_punc and self.is_punc(stop_punc):
+                break
+            elif stop_cond_func and stop_cond_func():
                 break
 
             if first:
                 first = False
             else:
+                # TODO: `;` before next number at the end of numbered example is skipped too
+                #  looks like it is only remedied by parser
+                # TODO: no, it should be skipped here or it'll loop otherwise
                 self.skip_punc(separator)
-            a.append(parser())  # make sure parsers don't consume separator or stop
 
-        self.skip_punc(stop)
+            parse = parser()
+            if parse:
+                a.append(parser())  # make sure parsers don't consume separator or stop
+
+        if stop_punc:
+            self.skip_punc(stop_punc)
         return a
 
     def parse_numbered_sense(self):
@@ -588,7 +610,10 @@ class Parser:
 
             # optionaly there can be translation, usually with affix, represented as =...
             if not self.is_punc(';'):
-                sa_transl = self.parse_delimited(None, ';', ',', self.parse_word)
+                # TODO: the separator here often (always?) isn't `,`, it's `;`
+                #  possible solution: allow passing function for `stop` and pass
+                #   `self.is_number` or composion of `self.is_tag`` and `self.is_number`
+                sa_transl = self.parse_delimited(None, ',', self.parse_word, stop_punc=';')
                 numbered_sense['sah_transl'] = sa_transl
 
         # word translation
@@ -596,9 +621,14 @@ class Parser:
         if not self.is_punc(';'):
             # self.skip_whitespace()
             sah_sense_translations = self.parse_delimited(
-                None, ';', ',', self.parse_words
+                None, ';', self.parse_words, stop_cond_func=compose_predicates_or(
+                        self.is_number
+                    )
             )
             numbered_sense['sah_sense_translations'] = sah_sense_translations
+
+        if self.is_punc(';'):
+            self.inp.next()
 
         return numbered_sense
 
@@ -642,7 +672,7 @@ class Parser:
                 return dict(type="sense", value=self.parse_sense)
 
         if self.is_punc('('):
-            synonyms = self.parse_delimited('(', ')', ',', self.parse_word)
+            synonyms = self.parse_delimited('(', ',', self.parse_word, stop_punc=')')
             return dict(type='synonyms', value=synonyms)
 
     def parse_entry(self):
