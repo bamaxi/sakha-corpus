@@ -188,31 +188,33 @@ class TokenStream:
         self.inp = inp
         self.unknown = object()
         self.current = None
-        self.skip_space = skip_space
 
-        if self.skip_space:
-            self.__class__.read_next = self.__class__.read_next_skip_space
-        else:
-            self.__class__.read_next = self.__class__.read_next_keep_space
-
-    def make_read_next_skip_space(func):
-        @wraps(func)
-        def wrapped_read_next(self):
-            # self.read_while(self.is_whitespace)
-            # print(f"before first while")
-            while not self.inp.eof() and self.is_whitespace(self.inp.peek()):
-                self.inp.next()
-            # print(f"after first while, w1_c = {w1_c}")
-            res = func(self)
-            logger.info(f"after res: {res}")
-            return res
-        return wrapped_read_next
-
-    @make_read_next_skip_space
-    def read_next_skip_space(self):
-        return self.read_next_keep_space()
-
-    make_read_next_skip_space = staticmethod(make_read_next_skip_space)
+        self.__class__.read_next = self.__class__.read_next_keep_space
+    #     self.skip_space = skip_space
+    #
+    #     if self.skip_space:
+    #         self.__class__.read_next = self.__class__.read_next_skip_space
+    #     else:
+    #         self.__class__.read_next = self.__class__.read_next_keep_space
+    #
+    # def make_read_next_skip_space(func):
+    #     @wraps(func)
+    #     def wrapped_read_next(self):
+    #         # self.read_while(self.is_whitespace)
+    #         # print(f"before first while")
+    #         while not self.inp.eof() and self.is_whitespace(self.inp.peek()):
+    #             self.inp.next()
+    #         # print(f"after first while, w1_c = {w1_c}")
+    #         res = func(self)
+    #         logger.info(f"after res: {res}")
+    #         return res
+    #     return wrapped_read_next
+    #
+    # @make_read_next_skip_space
+    # def read_next_skip_space(self):
+    #     return self.read_next_keep_space()
+    #
+    # make_read_next_skip_space = staticmethod(make_read_next_skip_space)
 
     @staticmethod
     def is_sakha_only(ch):
@@ -301,10 +303,10 @@ class TokenStream:
 
     def read_next_keep_space(self):
         inp = self.inp
-        if inp.eof():
+        ch_or_tag = inp.peek()
+        if ch_or_tag is None:
             return None
 
-        ch_or_tag = inp.peek()
         logger.debug(f"ch_or_tag is `{ch_or_tag}`, current is `{self.current}`")
         # TODO: if or else if?
         if isinstance(ch_or_tag, dict):
@@ -387,6 +389,64 @@ class TokenStream:
     def eof(self):
         logger.debug(f"in `eof`: current is {self.current}")
         return self.peek() is None
+
+    def croak(self, *args, **kwargs):
+        self.inp.croak(*args, **kwargs)
+
+
+class TokenFeeder():
+    def __init__(self, inp: TokenStream, skip_space=True):
+        self.inp = inp
+        self.skip_space = skip_space
+
+        # self.tag_to_skip = None
+
+        if self.skip_space:
+            # self.__class__.next = self.__class__.next_skip_space
+            self.__class__.peek = self.__class__.peek_skip_space
+        else:
+        #     self.__class__.next = self.__class__.next_keep_space
+            self.__class__.peek = self.__class__.peek_skip_space
+
+    def make_next_skip_tag(func_next):
+        def wrapped_read_next(self):
+            res = func_next(self)
+            logger.debug(f"in `wrapped_read_next`, before `if`: {res}")
+            if (hasattr(self, "tag_to_skip") and not self.eof()
+                and bool(res) and res['type'] == 'tag'
+                and (not self.tag_to_skip.get('value')
+                    or res['value'] == self.tag_to_skip['value'])
+                and (not self.tag_to_skip.get('kind')
+                    or res['kind'] == self.tag_to_skip['kind'])
+            ):
+                logger.info(f"skipping extraneous tag {self.tag_to_skip}")
+                # self.inp.current = None
+                new_res = self.inp.next()
+                return new_res
+            else:
+                return res
+
+        return wrapped_read_next
+
+    @make_next_skip_tag
+    def next(self):
+        return self.inp.next()
+
+    make_next_skip_tag = staticmethod(make_next_skip_tag)
+
+    def peek_skip_space(self):
+        while (self.inp.peek() or {}).get("type") == "whitespace":
+            print(self.inp.peek(), self.inp.current)
+            self.inp.next()
+
+        return self.inp.peek()
+
+    def peek_keep_space(self):
+        res = self.inp.peek()
+        return res
+
+    def eof(self):
+        return self.inp.eof()
 
     def croak(self, *args, **kwargs):
         self.inp.croak(*args, **kwargs)
