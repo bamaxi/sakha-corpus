@@ -347,6 +347,16 @@ class TokenStream:
                 return dict(type='word', lang='sa',
                             value=inp.next()+self.read_while(str.isalpha))
             elif self.is_punc(ch_or_tag):
+                # # TODO: delete. This can't be working as whitespace is still present
+                # if ch_or_tag == ';':
+                #     # this is in order to skip `;` at the end of example, which
+                #     #   otherwise messes everyting up
+                #     value = inp.next()
+                #     next_ch_or_tag = inp.peek()
+                #     if next_ch_or_tag.isdecimal():
+                #         return self.read_arabic_number()
+                # else:
+                #     value = inp.next()
                 return dict(type='punc', value=inp.next())
             elif ch_or_tag.isdecimal():
                 return self.read_arabic_number()
@@ -493,34 +503,26 @@ class Parser:
         inp = self.inp
         # TODO: tag reliance here currently
         #   note: in sa-ru sah example is strong and russian normal
-        # if self.is_tag('strong', '<'):
-        #     ru_example = []
-        #     self.skip_tag('strong', '<')
-        #     while not inp.eof():
-        #         if self.is_tag('strong', '>'):
-        #             break
-        #         ru_example.append(self.skip_word())
-        #     self.skip_tag('strong', '>')
-        #     return dict(type='example', kind="ru", body=ru_example)
-        # else:
-        #     sah_ru_example = []
-        #     while not inp.eof():
-        #         sah_ru_example.append(self.skip_word())
-        #     return dict(type='sah_ru_example', body=sah_ru_example)
+
+        def get_subarray_of(arr):
+            l = []
+            arr.append(l)
+            return l
+
         ru_example = []
         sa_example = []
         sa_ru_example = []
         open_tag = None
         array = None
-        # TODO: eventually it meets what is `stop` or `sep` at `delimited above`
-        #     possible solution: if self.is_word() before reading
+        cur_array = None  # TODO: better changed to source / targ for generality later
         # while not inp.eof():
-        while self.is_word() or self.is_tag('strong'):
+        while self.is_word() or self.is_punc(',') or self.is_tag('strong'):
             if self.is_tag('strong', '<'):
                 self.skip_tag('strong', '<')
                 if not open_tag:
                     open_tag = True
                     array = ru_example # change array
+                    cur_array = 'ru'
                 else:
                     inp.croak(f"Unexpected tag: `{inp.peek()}`. <strong> already open")
 
@@ -528,11 +530,21 @@ class Parser:
                 self.skip_tag('strong', '>')
                 if open_tag:
                     open_tag = None
-                    array = sa_example # change array
+                    array = get_subarray_of(sa_example) # change array
+                    cur_array = 'sa'
                 else:
                     inp.croak("Expected word or closing </strong>")
             elif self.is_tag():
                 inp.croak(f"Unexpected tag: `{inp.peek()}`")
+
+            if self.is_punc(','):
+                # translation to target lang has multiple options
+                if cur_array != 'sa':
+                    # likely part of source lang example
+                    array.append(inp.next())
+                else:
+                    self.skip_punc()
+                    array = get_subarray_of(sa_example)
 
             if array is None:
                 array = sa_ru_example
@@ -540,7 +552,11 @@ class Parser:
             if self.is_word():
                 array.append(inp.next())
 
-        res = {"type":"example"}
+        res = {"type": "example"}
+        # TODO: does introduction of subarrays mess with truthiness check?
+        if len(sa_example) == 1:
+            sa_example = sa_example[0]
+
         if ru_example and sa_example:
             res.update(dict(ru_example=ru_example, sa_example=sa_example))
         elif not(ru_example or sa_example):
@@ -553,7 +569,7 @@ class Parser:
         return res
 
     def parse_delimited(self, start, separator, parser,
-                        stop_punc=None, stop_cond_func=None):
+                        stop_punc=None, stop_punc_list=None, stop_cond_func=None):
         # TODO: whitespace will interfere!
         a = []
         first = True
@@ -564,6 +580,9 @@ class Parser:
             # if self.is_punc(stop):
             #     break
             if stop_punc and self.is_punc(stop_punc):
+                break
+            elif (stop_punc_list
+                  and any(self.is_punc(punc) for punc in stop_punc_list)):
                 break
             elif stop_cond_func and stop_cond_func():
                 break
@@ -578,7 +597,7 @@ class Parser:
 
             parse = parser()
             if parse:
-                a.append(parser())  # make sure parsers don't consume separator or stop
+                a.append(parse)  # make sure parsers don't consume separator or stop
 
         if stop_punc:
             self.skip_punc(stop_punc)
@@ -613,7 +632,32 @@ class Parser:
                 # TODO: the separator here often (always?) isn't `,`, it's `;`
                 #  possible solution: allow passing function for `stop` and pass
                 #   `self.is_number` or composion of `self.is_tag`` and `self.is_number`
-                sa_transl = self.parse_delimited(None, ',', self.parse_word, stop_punc=';')
+
+                # TODO: another problem: after translation there could be
+                #   (what?? grammar explanation in target lang?) in ()
+                sa_transl = self.parse_delimited(None, ',', self.parse_word,
+                    # stop_punc_list=[';', '(']
+                    stop_cond_func=compose_predicates_or(
+                        lambda: self.is_punc(';'), lambda: self.is_tag('em')
+                    )
+                )
+                if self.is_punc(';'):
+                    self.skip_punc()
+                elif self.is_tag('em'):
+                    gram_desc_sa = []
+                    self.skip_tag('em')
+                    while not inp.eof():
+                        if self.is_tag('em', '>'):
+                            break
+                        if self.is_punc(')') or self.is_punc(';'):
+                            self.skip_punc()
+                            continue
+                        gram_desc_sa.append(inp.next())
+                    self.skip_tag('em', '>')
+                    numbered_sense['gram_desc_sa'] = (
+                        gram_desc_sa if gram_desc_sa[-1]['value'] != ')'
+                        else gram_desc_sa[:-1])
+
                 numbered_sense['sah_transl'] = sa_transl
 
         # word translation
@@ -626,9 +670,6 @@ class Parser:
                     )
             )
             numbered_sense['sah_sense_translations'] = sah_sense_translations
-
-        if self.is_punc(';'):
-            self.inp.next()
 
         return numbered_sense
 
@@ -660,13 +701,19 @@ class Parser:
             return res
         elif self.is_tag():
             # TODO: decide what to do with tags
+            # turns out this accidentally skips exraneous tag surrounding number for example!
+            #   (ex. `v`.3.9). Something still needs to be done about the closing tag though
             inp.next()
             return None
 
         if self.is_number():
             if self.is_number(kind='arabic', dotted=True):
-                inp.next()
-                return self.parse_numbered_sense()
+                # TODO: logging example number could be done here
+                #   e.g. `parse_numbered_sense` fails (then we take all till next number or <p> tag)
+                num = inp.next()['value']
+                numbered_sense = {'type': 'numbered_sense', 'num': num}
+                numbered_sense.update(self.parse_numbered_sense())
+                return numbered_sense
             elif self.is_number(kind='roman'):
                 self.skip_number(kind='roman')
                 return dict(type="sense", value=self.parse_sense)
@@ -679,6 +726,6 @@ class Parser:
         """parses <div> - the whole lexeme entry"""
         inp = self.inp
         entry = []
-        while not inp.eof() and inp:  # and inp needed due to None instead of whitespace in
+        while inp and not inp.eof():  # and inp needed due to None instead of whitespace in
             entry.append(self.parse_atom())
         return dict(type='entry', entry=entry)
