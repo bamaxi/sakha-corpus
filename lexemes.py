@@ -412,15 +412,17 @@ class TokenFeeder():
         def wrapped_read_next(self):
             res = func_next(self)
             logger.debug(f"in `wrapped_read_next`, before `if`: {res}")
-            if (hasattr(self, "tag_to_skip") and not self.eof()
-                and bool(res) and res['type'] == 'tag'
+            if not self.eof() and bool(res) and res['type'] == 'tag':
+
                 and (not self.tag_to_skip.get('value')
-                    or res['value'] == self.tag_to_skip['value'])
+                     or res['value'] == self.tag_to_skip['value'])
                 and (not self.tag_to_skip.get('kind')
-                    or res['kind'] == self.tag_to_skip['kind'])
-            ):
+                     or res['kind'] == self.tag_to_skip['kind']
+
+
                 logger.info(f"skipping extraneous tag {self.tag_to_skip}")
                 # self.inp.current = None
+                del self.tag_to_skip
                 new_res = self.inp.next()
                 return new_res
             else:
@@ -577,6 +579,7 @@ class Parser:
         cur_array = None  # TODO: better changed to source / targ for generality later
         # while not inp.eof():
         while self.is_word() or self.is_punc(',') or self.is_tag('strong'):
+            # TODO:
             if self.is_tag('strong', '<'):
                 self.skip_tag('strong', '<')
                 if not open_tag:
@@ -599,8 +602,7 @@ class Parser:
 
             if self.is_punc(','):
                 # translation to target lang has multiple options
-                if cur_array != 'sa':
-                    # likely part of source lang example
+                if cur_array != 'sa':  # likely part of source lang example
                     array.append(inp.next())
                 else:
                     self.skip_punc()
@@ -724,6 +726,13 @@ class Parser:
         # if self.is_whitespace():
         if not self.is_punc(';'):
             # self.skip_whitespace()
+            # TODO: <strong> in в.9 messes is_number checking
+            #   one idea: prevent parse_delimited from consuming `;` which isn't separator
+            #   but is actual stop. But that was the solution to its indistinguishability
+            #   from separator `;`
+            #   possible solution: split `parse_words` into smaller functions
+            #   and use maybe_stop in `parse_delimited`, and if it's not stop just parse it
+            #     this it tied to another TODO: pass mutable dicts and lists and add on the go
             sah_sense_translations = self.parse_delimited(
                 None, ';', self.parse_words, stop_cond_func=compose_predicates_or(
                         self.is_number
@@ -761,9 +770,11 @@ class Parser:
             return res
         elif self.is_tag():
             # TODO: decide what to do with tags
-            # turns out this accidentally skips exraneous tag surrounding number for example!
-            #   (ex. `v`.3.9). Something still needs to be done about the closing tag though
-            inp.next()
+            # turns out this accidentally skips extraneous tag surrounding number for example!
+            #   (ex. `в`.3.9). Something still needs to be done about the closing tag though
+            print(f"cur tok is tag: {tok}")
+            tag = inp.next()
+            self.inp.tag_to_skip = dict(type="tag", value=tag['value'])
             return None
 
         if self.is_number():
@@ -771,6 +782,10 @@ class Parser:
                 # TODO: logging example number could be done here
                 #   e.g. `parse_numbered_sense` fails (then we take all till next number or <p> tag)
                 num = inp.next()['value']
+                if hasattr(inp, "tag_to_skip"):
+                    print(f"attr value: {inp.tag_to_skip}, next el would be {inp.peek()}")
+                else:
+                    print(f"no attr `tag_to_skip`, next el would be {inp.peek()}")
                 numbered_sense = {'type': 'numbered_sense', 'num': num}
                 numbered_sense.update(self.parse_numbered_sense())
                 return numbered_sense
