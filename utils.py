@@ -45,15 +45,22 @@ def _get_rus_alphabet(file="ru_alphabet.txt"):
     return letters
 
 
-def _get_sakha_alphabet(file="sa_alphabet.txt"):
+def _get_sakha_alphabet(file="sa_alphabet.txt", res_container="frozenset",
+                        lower_only=False):
     with open(file, 'r', encoding='utf-8') as f:
-        letters = frozenset(f.read().split())
+        letters = f.read().split()
+    if lower_only:
+        letters = letters[1::2]
+    if res_container == "frozenset":
+        return frozenset(letters)
     return letters
 
 
-def _get_sakhaonly_letters(file="sa_uniquealphabet.txt"):
+def _get_sakhaonly_letters(file="sa_uniquealphabet.txt", res_container="frozenset"):
     with open(file, 'r', encoding='utf-8') as f:
-        letters = frozenset(f.read().split())
+        letters = f.read().split()
+    if res_container == "frozenset":
+        return frozenset(letters)
     return letters
 
 

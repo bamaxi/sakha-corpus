@@ -183,23 +183,8 @@ def enlist_words(out_filename="words.txt"):
     # TODO: if prefix is e.g. `аб` and first res is `аба` we can change prefix for first res
     #   then for exhaust() we can try first_res + 1 symb from last res
     #   (but first res must be last res's prefix!!!)
-    # while prefixes_next_letter or prefixes_to_exhaust:
-    #     print(f"before loops, res keys are {res.keys()}")
-    #     sleep(2)
 
-        # while prefixes_to_exhaust:
-        #     print(f"before exhaust, deques are `{prefixes_to_exhaust}`, `{prefixes_next_letter} `")
-        #     words = exhaust_prefix()
-        #     print(f"words are: {words},\ndeques are `{prefixes_to_exhaust}`, `{prefixes_next_letter} `")
-        #     if words:
-        #         res.update(dict.fromkeys(words))
-
-        # if prefixes_to_exhaust:
-        # TODO: is_first messes with exactly what I was trying to do:
-
-    while prefixes_next_letter: # and (is_first or len(prefixes_next_letter) > 1):
-        # if is_first:
-        #     is_first = False
+    while prefixes_next_letter:
         previous_prefix = prefixes_next_letter[-1] if prefixes_next_letter else None
         logger.debug(f"before `continue`, deques are `{prefixes_to_exhaust}`, `{prefixes_next_letter}`")
         words = continue_alphabet()
@@ -227,15 +212,6 @@ def enlist_words(out_filename="words.txt"):
         with open(out_filename, 'w', encoding='utf-8') as outf:
             outf.write('\n'.join(res.keys()))
 
-
-        # else:
-        #     print(f"before continue,\ndeques are `{prefixes_to_exhaust}`, `{prefixes_next_letter} `")
-        #     words = continue_alphabet()
-        #     print(f"words are: {words},\ndeques are `{prefixes_to_exhaust}`, `{prefixes_next_letter} `")
-        #     if words:
-        #         res.update(dict.fromkeys(words))
-
-        # is_first = True
 
 if __name__ == "__main__":
     res = {}
