@@ -167,6 +167,37 @@ def make_read_next_skip_space_glob(func):
     return wrapped_read_next
 
 
+class IsWhitespace:
+    def __init__(self):
+        self.is_consumed = False
+
+    def match(self, tok):
+        if self.is_consumed:
+            return False
+
+        return tok and tok.get("type") == "whitespace"
+
+
+class IsDesiredTag:
+    def __init__(self, **desired_tag):
+        self.is_consumed = False
+        # TODO: include type and make it generic for tokens?
+        self.tag_value = desired_tag.get('value')
+        self.tag_kind = desired_tag.get('kind')
+
+    def match(self, tok):
+        if self.is_consumed:
+            return False
+
+        if (bool(tok) and tok['type'] == 'tag'
+         and (not self.tag_value or tok['value'] == self.tag_value)
+         and (not self.tag_kind or tok['kind'] == self.tag_kind)):
+            self.is_consumed = True
+            return True
+        else:
+            return False
+
+
 class TokenStream:
     """
     reads input characters (and tags) one by one and forms tokens
@@ -187,10 +218,15 @@ class TokenStream:
     """
     def __init__(self, inp: InputStream, skip_space=True):
         self.inp = inp
+        self.skip_space = skip_space
         self.unknown = object()
         self.current = None
 
-        self.__class__.read_next = self.__class__.read_next_keep_space
+        self.filters = []
+        if skip_space:
+            self.filters.append(IsWhitespace())
+
+        self.__class__.read_next = self.__class__.read_next_filt
     #     self.skip_space = skip_space
     #
     #     if self.skip_space:
@@ -374,8 +410,28 @@ class TokenStream:
                 inp.next()
                 return self.unknown
 
-    # TODO: что если вовзращать объект класса такой же как дикт, но был бы аргумент
-    #   типа длины который для строк - их длину, для тэгов - длину внутренностей
+    def add_tag_filter(self, **desired_tag):
+        self.filters.append(IsDesiredTag(**desired_tag))
+
+    def remove_consumed_filters(self):
+        filters_left = []
+        for filt in self.filters:
+            if not filt.is_consumed:
+                filters_left.append(filt)
+
+        self.filters = filters_left
+
+    def read_next_filt(self):
+        tok = self.read_next_keep_space()
+        if not self.filters:
+            return tok
+
+        while any(filt.match(tok) for filt in self.filters):
+            tok = self.read_next_keep_space()
+
+        self.remove_consumed_filters()
+
+        return tok
 
     def peek(self):
         logger.debug(f"in `peek`: current is {self.current}")
@@ -492,7 +548,7 @@ def compose_predicates_or(*predicates):
 
 
 class Parser:
-    def __init__(self, inp: TokenFeeder):
+    def __init__(self, inp: TokenStream):
         self.inp = inp
         self._tok_type_to_method = dict(
             whitespace=self.is_whitespace, tag=self.is_tag,
@@ -553,7 +609,7 @@ class Parser:
         else:
             self.inp.croak(f"Expecting number")
 
-    def skip_tag(self, tag_value, tag_kind=None):
+    def skip_tag(self, tag_value=None, tag_kind=None):
         if self.is_tag(tag_value, tag_kind):
             self.inp.next()
         else:
@@ -619,7 +675,8 @@ class Parser:
             # TODO:
             if self.is_tag('strong', '<'):
                 if self.maybe_error(lambda: self.skip_tag('strong', '<'), self.is_word):
-                    self.inp.tok_to_skip = dict(type='tag', value='strong', kind='>')
+                    self.inp.add_tag_filter(type='tag', value='strong', kind='>')
+                    # self.inp.tok_to_skip = dict(type='tag', value='strong', kind='>')
                     break
 
                 if not open_tag:
@@ -724,6 +781,9 @@ class Parser:
         #     synonyms = self.parse_delimited('(', ')', ',', self.parse_word)
         #     numbered_sense["synonyms"] = synonyms
         if self.is_word():
+            # TODO: if there is no strong then translation could be in `()`
+            #   do we need to take that into account here or later?
+            #   option: pass self.is_punc('(') and sa_example
             self.maybe_orphan(
                 lambda: self.is_tag('em', '<'), gram_desc_ru,
                 self.is_number, sah_sense_translations
@@ -838,8 +898,8 @@ class Parser:
         elif self.is_tag(tok=tok):
             # TODO: decide what to do with tags
             print(f"cur tok is tag: {tok}")
-            # tag =
-            self.inp.tok_to_skip = dict(type="tag", value=inp.next()['value'])
+            # self.inp.tok_to_skip = dict(type="tag", value=inp.next()['value'])
+            self.inp.add_tag_filter(type='tag', value=inp.next()['value'])
             return None
 
         if self.is_number(tok=tok):
@@ -847,10 +907,10 @@ class Parser:
                 # TODO: logging example number could be done here
                 #   e.g. `parse_numbered_sense` fails (then we take all till next number or <p> tag)
                 num = inp.next()['value']
-                if hasattr(inp, "tok_to_skip"):
-                    print(f"attr value: {inp.tok_to_skip}, next el would be {inp.peek()}")
-                else:
-                    print(f"no attr `tok_to_skip`, next el would be {inp.peek()}")
+                # if hasattr(inp, "tok_to_skip"):
+                #     print(f"attr value: {inp.tok_to_skip}, next el would be {inp.peek()}")
+                # else:
+                #     print(f"no attr `tok_to_skip`, next el would be {inp.peek()}")
                 numbered_sense = {'type': 'numbered_sense', 'num': num}
                 # TODO: the problem with `</strong>` after 9 is that conditions in
                 #   `parse_numbered_sense` don't match
