@@ -76,6 +76,7 @@ class InputStream:
                 self.flat_list_pos += 1
                 self.pos = 0
 
+                # TODO: this can probably be eliminated with recursion ?
                 further_el = self.flat_inp[self.flat_list_pos]
                 if further_el['basic_type'] == 'tag':
                     ch_or_tag = further_el
@@ -176,9 +177,9 @@ class TokenStream:
         kind=' ', '\t'
       tag:
         kind='<','>'
-      arabic_number
+      number, kind: arabic
         1, 16, 53
-      roman_number
+      number, kind: roman
         I, II, X
       word
       punct
@@ -260,13 +261,13 @@ class TokenStream:
     def read_arabic_number(self, num_regex=re.compile('^[1-9][0-9]*$')):
         string = self.read_while(str.isdecimal)
         if num_regex.fullmatch(string):
-            tok = dict(type='arabic_number', valid=True, value=int(string))
+            tok = dict(type='number', kind="arabic", valid=True, value=int(string))
         else:
             logger.debug(f"arabic_number string `{string}` not matched fully by regex pattern")
-            tok = dict(type='arabic_number', valid=False, value=string)
+            tok = dict(type='number', kind="arabic", valid=False, value=string)
         if self.inp.peek() == '.':
             logger.debug(f"\tchecking dot")
-            self.inp.next() # TODO: should dot be consumed here?
+            self.inp.next()
             tok['dotted'] = True
 
         return tok
@@ -280,16 +281,17 @@ class TokenStream:
         string = self.read_while(self.is_roman)
         # TODO: check correctness of dot appending
         if re_roman.fullmatch(string):
-            return dict(type='roman_number', valid=True, value=string)
+            return dict(type='number', kind="roman", valid=True, value=string)
         else:
             logger.debug(f"roman_number string `{string}` not matched fully by regex pattern")
-            return dict(type='roman_number', valid=False, value=string)
+            return dict(type='number', kind="roman", valid=False, value=string)
 
     def read_word(self):
         string = self.read_while(self.is_word_char)
         if any(map(self.is_sakha_only, string)):
             word = dict(type='word', lang='sa', value=string)
         else:
+            # TODO: perhaps we don't need lang=0 here
             word = dict(type='word', lang=0, value=string)
         if string[0] == '=':
             word["affix"] = "suff"
@@ -312,7 +314,7 @@ class TokenStream:
         if isinstance(ch_or_tag, dict):
             if ch_or_tag['value'] == 'br':
                 inp.next()
-                return dict(type='newline', kind='br')
+                return dict(type='whitespace', kind="newline", value='br')
             else:
                 inp.next()
                 ch_or_tag['type'] = 'tag'
@@ -341,7 +343,8 @@ class TokenStream:
 
         else:
             if ch_or_tag == '\n':
-                return dict(type='newline', kind=inp.next())
+                # TODO: does recent change to `whitespace` type mess anything?
+                return dict(type='whitespace', kind="newline", value=inp.next())
             elif self.is_whitespace(ch_or_tag):
                 return dict(type='whitespace', kind=inp.next())
             elif ch_or_tag == '=':  # affixes and clitics in Sakha are coded so
@@ -394,12 +397,12 @@ class TokenStream:
         self.inp.croak(*args, **kwargs)
 
 
-class TokenFeeder():
+class TokenFeeder:
     def __init__(self, inp: TokenStream, skip_space=True):
         self.inp = inp
         self.skip_space = skip_space
 
-        # self.tag_to_skip = None
+        self.history_tok_to_skip = []
 
         if self.skip_space:
             # self.__class__.next = self.__class__.next_skip_space
@@ -408,34 +411,59 @@ class TokenFeeder():
         #     self.__class__.next = self.__class__.next_keep_space
             self.__class__.peek = self.__class__.peek_skip_space
 
-    def make_next_skip_tag(func_next):
-        def wrapped_read_next(self):
-            res = func_next(self)
-            logger.debug(f"in `wrapped_read_next`, before `if`: {res}")
-            if not self.eof() and bool(res) and res['type'] == 'tag':
+    def make_next_tag_skipper_dec(func_type="next"):  # next|keep
+        def make_func_skip_tag(func):
+            def wrapped_next(self):
+                # if func_type == "peek":
+                #     res = self.inp.peek()
+                # elif func_type == "next":
+                #     res = func(self)
+                res = func(self)
 
-                and (not self.tag_to_skip.get('value')
-                     or res['value'] == self.tag_to_skip['value'])
-                and (not self.tag_to_skip.get('kind')
-                     or res['kind'] == self.tag_to_skip['kind']
+                logger.debug(f"in `wrapped_next`, before `if`, func_type was {func_type}, res: {res}")
 
+                if (hasattr(self, "tok_to_skip") and not self.eof()
+                    and bool(res) and res['type'] == 'tag'
+                    and (not self.tok_to_skip.get('value')
+                         or res['value'] == self.tok_to_skip['value'])
+                    and (not self.tok_to_skip.get('kind')
+                         or res['kind'] == self.tok_to_skip['kind'])
+                ):
+                    logger.info(f"skipping extraneous tag {self.tok_to_skip}")
 
-                logger.info(f"skipping extraneous tag {self.tag_to_skip}")
-                # self.inp.current = None
-                del self.tag_to_skip
-                new_res = self.inp.next()
-                return new_res
-            else:
-                return res
+                    # `self.inp.current = None` isn't needed with `next` since it
+                    #   was reset anyway
+                    self.history_tok_to_skip.append(self.tok_to_skip)
+                    del self.tok_to_skip
 
-        return wrapped_read_next
+                    # TODO: this breaks at 14 (or both at 11??)
+                    # if func_type == "peek":
+                    #     self.inp.next()
+                    #     new_res = self.inp.peek()
+                    #     logger.info(f"func_type is {func_type}, so new_res is {new_res}")
+                    # elif func_type == "next":
+                    #     new_res = self.inp.next()
+                    #     logger.info(f"func_type is {func_type}, so new_res is {new_res}")
+                    # # new_res = self.inp.next()  # EARLIER CODE
 
-    @make_next_skip_tag
+                    # TODO: this breaks at 11
+                    if func_type == "peek":
+                        self.inp.next()
+
+                    new_res = func(self)
+
+                    return new_res
+                else:
+                    return res
+
+            return wrapped_next
+        return make_func_skip_tag
+
+    @make_next_tag_skipper_dec(func_type="next")
     def next(self):
         return self.inp.next()
 
-    make_next_skip_tag = staticmethod(make_next_skip_tag)
-
+    @make_next_tag_skipper_dec(func_type="peek")
     def peek_skip_space(self):
         while (self.inp.peek() or {}).get("type") == "whitespace":
             print(self.inp.peek(), self.inp.current)
@@ -443,9 +471,12 @@ class TokenFeeder():
 
         return self.inp.peek()
 
+    @make_next_tag_skipper_dec(func_type="peek")
     def peek_keep_space(self):
         res = self.inp.peek()
         return res
+
+    make_next_tag_skipper_dec = staticmethod(make_next_tag_skipper_dec)
 
     def eof(self):
         return self.inp.eof()
@@ -461,7 +492,7 @@ def compose_predicates_or(*predicates):
 
 
 class Parser:
-    def __init__(self, inp: TokenStream):
+    def __init__(self, inp: TokenFeeder):
         self.inp = inp
         self._tok_type_to_method = dict(
             whitespace=self.is_whitespace, tag=self.is_tag,
@@ -469,29 +500,35 @@ class Parser:
             word=self.is_word
         )
 
-    def is_whitespace(self):
-        tok = self.inp.peek()
+    def is_whitespace(self, tok=None):
+        if not tok:
+            tok = self.inp.peek()
         return bool(tok) and tok['type'] == 'whitespace'
 
-    def is_number(self, kind='arabic', value=None, dotted=None):
-        tok = self.inp.peek()
-        return (bool(tok) and tok['type'] == f"{kind}_number"
+    def is_number(self, kind=None, value=None, dotted=None, tok=None):
+        if not tok:
+            tok = self.inp.peek()
+        return (bool(tok) and tok['type'] == "number"
+                and (not kind or tok['kind'] == kind)
                 and (not value or tok['value'] == value)
                 and (not dotted or tok.get('dotted') == dotted))
 
-    def is_tag(self, tag_value=None, tag_kind=None):
-        tok = self.inp.peek()
+    def is_tag(self, tag_value=None, tag_kind=None, tok=None):
+        if not tok:
+            tok = self.inp.peek()
         return (bool(tok) and tok['type'] == 'tag'
                 and (not tag_value or tok['value'] == tag_value)
                 and (not tag_kind or tok['kind'] == tag_kind))
 
-    def is_punc(self, value=None):
-        tok = self.inp.peek()
+    def is_punc(self, value=None, tok=None):
+        if not tok:
+            tok = self.inp.peek()
         return (bool(tok) and tok['type'] == 'punc'
                 and (not value or tok['value'] == value))
 
-    def is_word(self):
-        tok = self.inp.peek()
+    def is_word(self, tok=None):
+        if not tok:
+            tok = self.inp.peek()
         return bool(tok) and tok['type'] == 'word'
 
     def is_tok(self, desired_tok):
@@ -510,7 +547,7 @@ class Parser:
         else:
             self.inp.croak(f"Expecting whitespace")
 
-    def skip_number(self, kind='arabic', dotted=None):
+    def skip_number(self, kind=None, dotted=None):
         if self.is_number(kind, dotted=dotted):
             self.inp.next()
         else:
@@ -581,7 +618,10 @@ class Parser:
         while self.is_word() or self.is_punc(',') or self.is_tag('strong'):
             # TODO:
             if self.is_tag('strong', '<'):
-                self.skip_tag('strong', '<')
+                if self.maybe_error(lambda: self.skip_tag('strong', '<'), self.is_word):
+                    self.inp.tok_to_skip = dict(type='tag', value='strong', kind='>')
+                    break
+
                 if not open_tag:
                     open_tag = True
                     array = ru_example # change array
@@ -590,10 +630,10 @@ class Parser:
                     inp.croak(f"Unexpected tag: `{inp.peek()}`. <strong> already open")
 
             if self.is_tag('strong', '>'):
-                self.skip_tag('strong', '>')
+                self.skip_tag()
                 if open_tag:
                     open_tag = None
-                    array = get_subarray_of(sa_example) # change array
+                    array = get_subarray_of(sa_example)  # change array
                     cur_array = 'sa'
                 else:
                     inp.croak("Expected word or closing </strong>")
@@ -638,15 +678,11 @@ class Parser:
         if start:
             self.skip_punc(start)
         while not self.inp.eof():
-            # # in case passed argument is a function first clause should do
-            # if self.is_punc(stop):
-            #     break
-            if stop_punc and self.is_punc(stop_punc):
-                break
-            elif (stop_punc_list
-                  and any(self.is_punc(punc) for punc in stop_punc_list)):
-                break
-            elif stop_cond_func and stop_cond_func():
+            if (stop_punc and self.is_punc(stop_punc)
+                or stop_punc_list
+                    and any(self.is_punc(punc) for punc in stop_punc_list)
+                or stop_cond_func and stop_cond_func()
+            ):
                 break
 
             if first:
@@ -654,7 +690,6 @@ class Parser:
             else:
                 # TODO: `;` before next number at the end of numbered example is skipped too
                 #  looks like it is only remedied by parser
-                # TODO: no, it should be skipped here or it'll loop otherwise
                 self.skip_punc(separator)
 
             parse = parser()
@@ -665,20 +700,37 @@ class Parser:
             self.skip_punc(stop_punc)
         return a
 
+    def maybe_orphan(self, is_orphan_cond, fut_parent_struct,
+                     not_orphan_cond, not_orphan_struct):
+        """checks whether what is being read now can be included in the bigger
+           struct further right"""
+        array = []
+        while not any((is_orphan_cond(), not_orphan_cond())):
+            array.append(self.inp.next())
+        if is_orphan_cond():
+            fut_parent_struct.extend(array)
+        elif not_orphan_cond():
+            not_orphan_struct.extend(array)
+
     def parse_numbered_sense(self):
         inp = self.inp
         numbered_sense = {}
+        gram_desc_ru = numbered_sense.setdefault('gram_desc_ru', [])
+        sah_sense_translations = numbered_sense.setdefault('sah_sense_translations', [])
 
         # TODO: that belongs higher up
         # if self.is_punc('('):
         #     # TODO: what parser to choose? perhaps need something simple for words
         #     synonyms = self.parse_delimited('(', ')', ',', self.parse_word)
         #     numbered_sense["synonyms"] = synonyms
+        if self.is_word():
+            self.maybe_orphan(
+                lambda: self.is_tag('em', '<'), gram_desc_ru,
+                self.is_number, sah_sense_translations
+            )
 
         # gram_desc
         if self.is_tag('em', '<'):
-            gram_desc = []
-            gram_desc_ru = []
             self.skip_tag('em', '<')
             # TODO: language choice should be made here
             #  or rather type should be simply 'gram_desc' with no lang
@@ -687,7 +739,6 @@ class Parser:
                     break
                 gram_desc_ru.append(inp.next())
             self.skip_tag('em', '>')
-            numbered_sense['gram_desc_ru'] = gram_desc_ru
 
             # optionaly there can be translation, usually with affix, represented as =...
             if not self.is_punc(';'):
@@ -711,6 +762,7 @@ class Parser:
                     while not inp.eof():
                         if self.is_tag('em', '>'):
                             break
+                        # TODO: do we need this continue clause?
                         if self.is_punc(')') or self.is_punc(';'):
                             self.skip_punc()
                             continue
@@ -733,74 +785,97 @@ class Parser:
             #   possible solution: split `parse_words` into smaller functions
             #   and use maybe_stop in `parse_delimited`, and if it's not stop just parse it
             #     this it tied to another TODO: pass mutable dicts and lists and add on the go
-            sah_sense_translations = self.parse_delimited(
+            sah_sense_translations.extend(self.parse_delimited(
                 None, ';', self.parse_words, stop_cond_func=compose_predicates_or(
-                        self.is_number
+                        self.is_number, lambda: self.is_punc('.'), lambda: self.is_tag('p')
                     )
-            )
-            numbered_sense['sah_sense_translations'] = sah_sense_translations
+                ))
 
         return numbered_sense
 
-    def parse_sense(self):
-        return "NOT IMPLEMENTED"
+    def maybe_error(
+            self, func_to_consume, is_next_tok_proper,
+            # *func_to_consume_args, **func_to_consume_kwargs
+    ):
+        # if
+        func_to_consume()
+        if not is_next_tok_proper():
+            return True
+        return False
 
     def maybe_pos(self):
         inp = self.inp
-        word = self.parse_word()
+        tok = self.inp.next()
 
-        if self.is_word():
-            words = [word]
-            while not inp.eof() and self.is_word():
-                words.append(self.parse_word())
-            return dict(type='grammar_desc???', value=words)
-        elif self.is_number() or self.is_punc('(') or self.is_tag(): # TODO: how is that supposed to work?
-            return dict(type='pos', value=word)
-        else:
-            inp.croak("Unexpected token")
+        if ((tok['type'] == 'word'
+                 or (tok['type'] == 'punc' and tok['value'] == '('))
+           and self.is_word()):
+            desc = [tok]
+            while not self.is_tag('em'):
+                desc.append(self.inp.next())
+            return dict(type='grammar_desc???', value=desc)
 
+        if (tok['type'] == 'word'
+              and (self.is_number() or self.is_punc('(') or self.is_tag())):
+            return dict(type='pos', value=tok)
+
+        inp.croak("Unexpected token")
+
+    def parse_sense(self):
+        return self.parse_atom()
+
+    # TODO: we are peeking too many times with all these functions, once is enough
+    #   they can be changed to optionally accept tag
     def parse_atom(self):
         inp = self.inp
         tok = inp.peek()
 
-        if self.is_tag('em', '<'):
+        if self.is_tag('em', '<', tok=tok):
             self.skip_tag('em', '<')
             res = self.maybe_pos()
             self.skip_tag('em', '>')
             return res
-        elif self.is_tag():
+        elif self.is_tag(tok=tok):
             # TODO: decide what to do with tags
-            # turns out this accidentally skips extraneous tag surrounding number for example!
-            #   (ex. `в`.3.9). Something still needs to be done about the closing tag though
             print(f"cur tok is tag: {tok}")
-            tag = inp.next()
-            self.inp.tag_to_skip = dict(type="tag", value=tag['value'])
+            # tag =
+            self.inp.tok_to_skip = dict(type="tag", value=inp.next()['value'])
             return None
 
-        if self.is_number():
-            if self.is_number(kind='arabic', dotted=True):
+        if self.is_number(tok=tok):
+            if self.is_number(kind='arabic', dotted=True, tok=tok):
                 # TODO: logging example number could be done here
                 #   e.g. `parse_numbered_sense` fails (then we take all till next number or <p> tag)
                 num = inp.next()['value']
-                if hasattr(inp, "tag_to_skip"):
-                    print(f"attr value: {inp.tag_to_skip}, next el would be {inp.peek()}")
+                if hasattr(inp, "tok_to_skip"):
+                    print(f"attr value: {inp.tok_to_skip}, next el would be {inp.peek()}")
                 else:
-                    print(f"no attr `tag_to_skip`, next el would be {inp.peek()}")
+                    print(f"no attr `tok_to_skip`, next el would be {inp.peek()}")
                 numbered_sense = {'type': 'numbered_sense', 'num': num}
+                # TODO: the problem with `</strong>` after 9 is that conditions in
+                #   `parse_numbered_sense` don't match
+                #   we need to skip
                 numbered_sense.update(self.parse_numbered_sense())
                 return numbered_sense
-            elif self.is_number(kind='roman'):
-                self.skip_number(kind='roman')
-                return dict(type="sense", value=self.parse_sense)
+            elif self.is_number(kind='roman', tok=tok):
+                self.skip_number()
+                return dict(type="sense", value=self.parse_sense())
 
-        if self.is_punc('('):
+        if self.is_punc('(', tok=tok):
             synonyms = self.parse_delimited('(', ',', self.parse_word, stop_punc=')')
             return dict(type='synonyms', value=synonyms)
+        elif self.is_punc('.', tok=tok):
+            self.skip_punc()
 
     def parse_entry(self):
         """parses <div> - the whole lexeme entry"""
         inp = self.inp
         entry = []
-        while inp and not inp.eof():  # and inp needed due to None instead of whitespace in
-            entry.append(self.parse_atom())
-        return dict(type='entry', entry=entry)
+        while inp and not inp.eof():
+            atom_parse = self.parse_atom()
+            logger.info(f"one atom: {atom_parse}")
+            # if atom_parse:
+            entry.append(atom_parse)
+        logger.info(entry)
+        return dict(type='entry', value=entry)
+
