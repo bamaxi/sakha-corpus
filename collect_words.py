@@ -1,13 +1,11 @@
 import re
 from collections import deque
-import random
-from time import sleep
 
 from typing import Any, MutableSequence, List, Dict, Union, Tuple
 
 import requests
 
-from utils import HEADERS, _get_sakha_alphabet
+from utils import random_delay_adder, HEADERS, _get_sakha_alphabet
 
 import logging
 import logging.config
@@ -53,21 +51,10 @@ def append_not_none(collection: MutableSequence, value: Any) -> None:
         collection.append(value)
 
 
-def random_delay_adder(min, max):
-    def add_random_delay(func):
-        def delayed_func(*args, **kwargs):
-            sleep(random.uniform(min, max))
-
-            return func(*args, **kwargs)
-
-        return delayed_func
-    return add_random_delay
-
-
 @random_delay_adder(0.75, 1.25)
 def get_prefix_json(prefix: str) -> Tuple[List[Dict[str, Union[str, int]]], str]:
     link = sakha_suggest_link + requests.utils.quote(prefix)
-    response = session.get(link, headers=HEADERS)
+    response = session.get(link)
 
     if response.status_code != 200:
         raise ValueError("Something went wrong while getting result")

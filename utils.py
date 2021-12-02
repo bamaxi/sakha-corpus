@@ -1,3 +1,8 @@
+import random
+from time import sleep
+
+from pathlib import Path
+
 HEADERS = {
     # 'authority': 'www.kith.com',
     'cache-control': 'max-age=0',
@@ -12,7 +17,15 @@ HEADERS = {
 }
 
 
-from pathlib import Path
+def random_delay_adder(min, max):
+    def add_random_delay(func):
+        def delayed_func(*args, **kwargs):
+            sleep(random.uniform(min, max))
+
+            return func(*args, **kwargs)
+
+        return delayed_func
+    return add_random_delay
 
 
 def write_to_csv(entries, filename='translations_{}.csv'):

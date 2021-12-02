@@ -15,6 +15,9 @@ sakha_link = sakhatyla_site + "translate?q="
 
 words = ("и", "в")
 
+session = requests.session()
+session.headers.update(HEADERS)
+
 # def get_similar
 #     TODO
 
@@ -22,10 +25,9 @@ Translation = Dict[str, Union[str, Tag]]
 
 
 def get_word_page(word: str) -> Tuple[str]:
-    session = requests.session()
     word_link = "translate?q=" + requests.utils.quote(word)
     link = sakhatyla_site + word_link
-    response = session.get(link, headers=HEADERS)
+    response = session.get(link)
 
     if response.status_code != 200:
         raise ValueError("Something went wrong while getting result")
