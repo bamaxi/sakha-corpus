@@ -43,8 +43,8 @@ def append_list_part(lst, filename, file_list_els_sep='\n'):
         file_list_els = f.read().split(file_list_els_sep)
         els_to_append = [el for el in lst
                          if el not in file_list_els]
-        print(f"{file_list_els}, {els_to_append}")
-        f.write(f"{file_list_els_sep if len(file_list_els) > 1 else ''}"
+        f.write(f"""{file_list_els_sep if len(file_list_els) > 1
+                     and els_to_append else ''}"""
                 + file_list_els_sep.join(els_to_append))
 
 
@@ -124,43 +124,14 @@ def get_new_first_letter_prefix(prefix):
     return SAKHA_ALPHABET[next_letter_i] + "а"
 
 
-# TODO: functions seem to differ only in the array used
-def exhaust_prefix():
-    prefix = prefixes_to_exhaust.pop()
-    items_list, link = get_prefix_json(prefix)
-
-    # no matter whether there are results
-    # prefix one letter up from current must be checked
-    append_not_none(prefixes_next_letter, get_next_letter_prefix(prefix))
-    # prefixes_next_letter.append(get_next_letter_prefix(prefix))
-
-    if not items_list:
-        return None
-
-    words = [item["Title"] for item in items_list]
-
-    # if all words with current prefix aren't exhausted by this search
-    if len(words) == NUM_MAX_RES:
-        # expression below needed for e.g. `бэйэ`, which is last result
-        #   for prefix `бэйэ`
-        last_word = next(word for word in words[::-1] if word != prefix)
-        next_prefix = last_word[:len(prefix) + 1]
-        prefixes_to_exhaust.append(next_prefix)
-        # append_not_none(prefixes_next_letter, get_next_letter_prefix(next_prefix))
-        # prefixes_next_letter.append(get_next_letter_prefix(next_prefix))
-
-    return words
-
-
-def continue_alphabet():
-    prefix = prefixes_next_letter.pop()
+def check_prefix(prefixes_queue):
+    prefix = prefixes_queue.pop()
     items_list, link = get_prefix_json(prefix)
 
     # no matter whether there are results
     # and if there are whether there is longer prefix to exhaust (below),
-    # we check prefix with last letter changed to the next in alphabet
+    # we should check prefix with last letter changed to the next in the alphabet
     append_not_none(prefixes_next_letter, get_next_letter_prefix(prefix))
-    # prefixes_next_letter.append(get_next_letter_prefix(prefix))
 
     if not items_list:
         return None
@@ -168,7 +139,9 @@ def continue_alphabet():
     words = [item["Title"] for item in items_list]
 
     # there are suggestions for prefix
-    # if there are 10 results - the max - prefix should increase to last number
+    # if there are 10 results - the max - it is possible, that
+    # not all words with current prefix are exhausted by this search, so we append
+    # to `exhaust` queue
     if len(words) == NUM_MAX_RES:
         # expression below needed for e.g. `бэйэ`, which is last result
         #   for prefix `бэйэ`
@@ -203,14 +176,14 @@ def enlist_words(out_filename="words.txt", mode='a'):
     while prefixes_next_letter:
         previous_prefix = prefixes_next_letter[-1]
         logger.debug(f"before `continue`, deques are `{prefixes_to_exhaust}`, `{prefixes_next_letter}`")
-        words = continue_alphabet()
+        words = check_prefix(prefixes_next_letter)
         logger.debug(f"words are: {words}, deques are `{prefixes_to_exhaust}`, `{prefixes_next_letter}`")
         if words:
             res.update(dict.fromkeys(words))
 
         while prefixes_to_exhaust:
             logger.debug(f"before `exhaust`, deques are `{prefixes_to_exhaust}`, `{prefixes_next_letter}`")
-            words = exhaust_prefix()
+            words = check_prefix(prefixes_to_exhaust)
             logger.debug(f"after `exhaust`, words are: {words},"
                          f"deques are `{prefixes_to_exhaust}`, `{prefixes_next_letter}`")
             if words:
@@ -229,14 +202,14 @@ def enlist_words(out_filename="words.txt", mode='a'):
         # logger.info(f"res after {previous_prefix}:\n{res.keys()}")
         # with open(out_filename, 'w', encoding='utf-8') as outf:
         #     outf.write('\n'.join(res.keys()))
-        append_list_part(res.keys(), "words_b")
+        append_list_part(res.keys(), out_filename)
 
 
 if __name__ == "__main__":
     mode = 'a'
 
     res = {}
-    prefixes_next_letter.append('ба')  # a place to start
+    prefixes_next_letter.extend(['ад', 'аҕп'])  # a place to start
     logger.info(SAKHA_ALPHABET)
 
-    enlist_words("words_b.txt", mode=mode)
+    enlist_words("words", mode=mode)
