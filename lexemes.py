@@ -62,39 +62,27 @@ class InputStream:
         # TODO: what to return, dict or string? depends on tokenizer
         next_el = self.flat_inp[self.flat_list_pos]
         if next_el['basic_type'] == 'tag':
-            self.pos = 0
-
             ch_or_tag = next_el
+            self.pos = 0
             self.flat_list_pos += 1
 
         elif next_el['basic_type'] == 'string':
-            try:
+            if self.pos <= len(next_el['value']) - 1:
                 ch_or_tag = next_el['value'][self.pos]
                 self.pos += 1
-            except IndexError as e:
+            else:
                 # the string has ended, so we move to the next element
-                self.flat_list_pos += 1
                 self.pos = 0
-
-                # TODO: this can probably be eliminated with recursion ?
-                further_el = self.flat_inp[self.flat_list_pos]
-                if further_el['basic_type'] == 'tag':
-                    ch_or_tag = further_el
-                    self.flat_list_pos += 1
-                elif further_el['basic_type'] == 'string':
-                    # TODO: this may be an impossible route actually
-                    ch_or_tag = further_el['value'][self.pos]
-                    self.pos += 1
-                else:
-                    self.croak("Basic type not supported")
+                self.flat_list_pos += 1
+                ch_or_tag = self.next()
 
         elif next_el['basic_type'] == 'sentinel':
             ch_or_tag = None
         else:
             self.croak("Unknown basic type")
 
-        if (isinstance(ch_or_tag, dict) and ch_or_tag['value'] == 'br'
-                or ch_or_tag == '\n'):
+        if (isinstance(ch_or_tag, dict)
+                and (ch_or_tag['value'] == 'br' or ch_or_tag == '\n')):
             self.line += 1
             self.col = 0
         elif ch_or_tag is not None:
@@ -107,21 +95,14 @@ class InputStream:
         if cur_el['basic_type'] == 'tag':
             ch_or_tag = cur_el
         elif cur_el['basic_type'] == 'string':
-            try:
+            if self.pos <= len(cur_el['value']) - 1:
                 ch_or_tag = cur_el['value'][self.pos]
-            except IndexError as e:
+            else:
                 # the string has ended, so we move to the next element
-                flat_list_pos = self.flat_list_pos + 1
-                pos = 0
+                self.pos = 0
+                self.flat_list_pos = self.flat_list_pos + 1
 
-                next_el = self.flat_inp[flat_list_pos]
-                if next_el['basic_type'] == 'tag':
-                    ch_or_tag = next_el
-                elif next_el['basic_type'] == 'string':
-                    # TODO: this may be an impossible route actually
-                    ch_or_tag = next_el['value'][pos]  # TODO: although route may be impossible, there should be pos, not self.pos
-                else:
-                    self.croak("Basic type not supported")
+                ch_or_tag = self.peek()
 
         elif cur_el['basic_type'] == 'sentinel':
             ch_or_tag = None
@@ -141,8 +122,7 @@ class InputStream:
         raise ValueError(f"{msg} ({str(self.line)}:{str(self.col)})")
 
     def warn(self, msg):
-        # note: positions are presented as they are in output of `lxml` parser
-        #   this isn't necessarily the same as in browser DOM
+
         raise RuntimeWarning(f"{msg} ({str(self.line)}:{str(self.col)})")
 
 
@@ -153,18 +133,6 @@ def compose_predicate(subpredicates, type='and'):
         return composition(subpredicate(inp) for subpredicate in subpredicates)
 
     return predicate
-
-
-def make_read_next_skip_space_glob(func):
-    print("inside decorator")
-
-    @wraps(func)
-    def wrapped_read_next(self):
-        print(f"inside wrapped")
-        self.read_while(self.is_whitespace)
-        return func(self)
-
-    return wrapped_read_next
 
 
 class IsWhitespace:
@@ -773,4 +741,3 @@ class Parser:
             entry.append(atom_parse)
         logger.info(entry)
         return dict(type='entry', value=entry)
-
