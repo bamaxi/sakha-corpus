@@ -227,31 +227,6 @@ class TokenStream:
             self.filters.append(IsWhitespace())
 
         self.__class__.read_next = self.__class__.read_next_filt
-    #     self.skip_space = skip_space
-    #
-    #     if self.skip_space:
-    #         self.__class__.read_next = self.__class__.read_next_skip_space
-    #     else:
-    #         self.__class__.read_next = self.__class__.read_next_keep_space
-    #
-    # def make_read_next_skip_space(func):
-    #     @wraps(func)
-    #     def wrapped_read_next(self):
-    #         # self.read_while(self.is_whitespace)
-    #         # print(f"before first while")
-    #         while not self.inp.eof() and self.is_whitespace(self.inp.peek()):
-    #             self.inp.next()
-    #         # print(f"after first while, w1_c = {w1_c}")
-    #         res = func(self)
-    #         logger.info(f"after res: {res}")
-    #         return res
-    #     return wrapped_read_next
-    #
-    # @make_read_next_skip_space
-    # def read_next_skip_space(self):
-    #     return self.read_next_keep_space()
-    #
-    # make_read_next_skip_space = staticmethod(make_read_next_skip_space)
 
     @staticmethod
     def is_sakha_only(ch):
@@ -356,27 +331,6 @@ class TokenStream:
                 ch_or_tag['type'] = 'tag'
                 ch_or_tag.pop('basic_type')
                 return ch_or_tag
-
-            # TODO: this code attempts parsing instead of tokenizing
-
-            # elif ch_or_tag['value'] == 'em' and ch_or_tag['kind'] == '<':
-            #     # TODO: is it only grammar comments in russian that are like this?
-            #     tok = dict(type='string', value=self.read_rus_comment())
-            #     # TODO: move through a token, but check if it's the correct one
-            #     tag = inp.next()
-            #     if not (tag['value'] == 'em' and ch_or_tag['kind'] == '>'):
-            #         inp.warn(f"Tag not closed: `{inp}`, found `{tag}` instead")
-            #     return tok  # TODO:
-            #
-            # elif ch_or_tag['value'] == 'strong':
-            #     # TODO: can't do or, because `.next()` consumes. Should peek to decide
-            #     further_el = inp.peek()
-            #     return self.read_roman_number() or self.read_russian()
-            # else:
-            #     print(f'not implemented for `{ch_or_tag}`')
-            #     inp.next()
-            #     return object()
-
         else:
             if ch_or_tag == '\n':
                 # TODO: does recent change to `whitespace` type mess anything?
@@ -388,16 +342,6 @@ class TokenStream:
                 return dict(type='word', lang='sa',
                             value=inp.next()+self.read_while(str.isalpha))
             elif self.is_punc(ch_or_tag):
-                # # TODO: delete. This can't be working as whitespace is still present
-                # if ch_or_tag == ';':
-                #     # this is in order to skip `;` at the end of example, which
-                #     #   otherwise messes everyting up
-                #     value = inp.next()
-                #     next_ch_or_tag = inp.peek()
-                #     if next_ch_or_tag.isdecimal():
-                #         return self.read_arabic_number()
-                # else:
-                #     value = inp.next()
                 return dict(type='punc', value=inp.next())
             elif ch_or_tag.isdecimal():
                 return self.read_arabic_number()
@@ -453,94 +397,6 @@ class TokenStream:
         self.inp.croak(*args, **kwargs)
 
 
-class TokenFeeder:
-    def __init__(self, inp: TokenStream, skip_space=True):
-        self.inp = inp
-        self.skip_space = skip_space
-
-        self.history_tok_to_skip = []
-
-        if self.skip_space:
-            # self.__class__.next = self.__class__.next_skip_space
-            self.__class__.peek = self.__class__.peek_skip_space
-        else:
-        #     self.__class__.next = self.__class__.next_keep_space
-            self.__class__.peek = self.__class__.peek_skip_space
-
-    def make_next_tag_skipper_dec(func_type="next"):  # next|keep
-        def make_func_skip_tag(func):
-            def wrapped_next(self):
-                # if func_type == "peek":
-                #     res = self.inp.peek()
-                # elif func_type == "next":
-                #     res = func(self)
-                res = func(self)
-
-                logger.debug(f"in `wrapped_next`, before `if`, func_type was {func_type}, res: {res}")
-
-                if (hasattr(self, "tok_to_skip") and not self.eof()
-                    and bool(res) and res['type'] == 'tag'
-                    and (not self.tok_to_skip.get('value')
-                         or res['value'] == self.tok_to_skip['value'])
-                    and (not self.tok_to_skip.get('kind')
-                         or res['kind'] == self.tok_to_skip['kind'])
-                ):
-                    logger.info(f"skipping extraneous tag {self.tok_to_skip}")
-
-                    # `self.inp.current = None` isn't needed with `next` since it
-                    #   was reset anyway
-                    self.history_tok_to_skip.append(self.tok_to_skip)
-                    del self.tok_to_skip
-
-                    # TODO: this breaks at 14 (or both at 11??)
-                    # if func_type == "peek":
-                    #     self.inp.next()
-                    #     new_res = self.inp.peek()
-                    #     logger.info(f"func_type is {func_type}, so new_res is {new_res}")
-                    # elif func_type == "next":
-                    #     new_res = self.inp.next()
-                    #     logger.info(f"func_type is {func_type}, so new_res is {new_res}")
-                    # # new_res = self.inp.next()  # EARLIER CODE
-
-                    # TODO: this breaks at 11
-                    if func_type == "peek":
-                        self.inp.next()
-
-                    new_res = func(self)
-
-                    return new_res
-                else:
-                    return res
-
-            return wrapped_next
-        return make_func_skip_tag
-
-    @make_next_tag_skipper_dec(func_type="next")
-    def next(self):
-        return self.inp.next()
-
-    @make_next_tag_skipper_dec(func_type="peek")
-    def peek_skip_space(self):
-        while (self.inp.peek() or {}).get("type") == "whitespace":
-            print(self.inp.peek(), self.inp.current)
-            self.inp.next()
-
-        return self.inp.peek()
-
-    @make_next_tag_skipper_dec(func_type="peek")
-    def peek_keep_space(self):
-        res = self.inp.peek()
-        return res
-
-    make_next_tag_skipper_dec = staticmethod(make_next_tag_skipper_dec)
-
-    def eof(self):
-        return self.inp.eof()
-
-    def croak(self, *args, **kwargs):
-        self.inp.croak(*args, **kwargs)
-
-
 def compose_predicates_or(*predicates):
     def is_any():
         return any(predicate() for predicate in predicates)
@@ -589,12 +445,6 @@ class Parser:
 
     def is_tok(self, desired_tok):
         tok_type = desired_tok.pop('type')
-        # if tok_type in ('tag', 'number'):
-        #     self._tok_type_to_method[tok_type](
-        #         desired_tok['value'], desired_tok.get('kind')
-        #     )
-        # else:
-        #     self._tok_type_to_method[tok_type]()
         return self._tok_type_to_method[tok_type](**desired_tok)
 
     def skip_whitespace(self):
@@ -633,21 +483,6 @@ class Parser:
         else:
             self.inp.croak(f"Expecting token {desired_tok}")
 
-    # def delimited(self, start, stop, parser):
-    #     inp = self.inp
-    #
-    #     a = []
-    #     self.skip_tok(start)
-    #     while not inp.eof():
-    #         if self.is_tok(stop):
-    #             break
-    #         a.append(parser())
-    #     self.skip_tok(stop)
-    #     return a
-
-    # def parse_gram_info(self):
-    #     self.skip_tag('em', '<')
-    #
     def parse_word(self):
         if self.is_word():
             return self.inp.next()
