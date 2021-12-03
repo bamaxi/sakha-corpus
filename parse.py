@@ -35,13 +35,15 @@ def get_word_page(word: str) -> Tuple[str]:
     return response.text, link, word_link, word
 
 
-def save_page(page: str, word: str):
-    path = f"sakhatyla.ru/{word}"
+def save_page(page: str, word: str, folder="sakhatyla.ru"):
+    path = f"{folder}/{word}"
     with open(path, 'w', encoding='utf-8') as fout:
         fout.write(page)
 
 
-def collect_transl_lexical_entries(word: str, link: str, path: Path = None) -> Dict[str, Union[str, List[Translation]]]:
+def collect_lexical_entries(
+        word: str, link: str, path: Path = None
+) -> Dict[str, Union[str, List[Translation]]]:
     if not path:
         page, _, _, _ = get_word_page(word)
     else:
@@ -49,53 +51,71 @@ def collect_transl_lexical_entries(word: str, link: str, path: Path = None) -> D
             page = f.read()
 
     soup = BeautifulSoup(page, 'lxml')
-    # # NEW: delete linebreaks
-    # for linebreak in soup.find_all('br'):
-    #     linebreak.extract()
 
     # достать тэг `<h2>Русский → Якутский</h2>` и смотреть его сестёр дальше
     #   пока не попадём на очередной <h2> (или `<p>ещё переводы</p>`)
     translation_tags: List[Translation] = []
     comment = ''
 
-    transl_header = soup.find_all('h2', string="Русский → Якутский")
-    if not transl_header:
-        comment = f"нет русского перевода. "
-                   # f"есть переводы `{','.join(transl_headers)}`")
-        print(comment)
-        res = dict(word=word, translations=[], link=link, comment=comment)
-        return res
-
-    for tag in transl_header[0].next_siblings:
-        if isinstance(tag, NavigableString):
+    # header_soup = soup.find_all('h2', string="Русский → Якутский")
+    directions = [
+        dict(source_l="ru", targ_l="sa", header="Русский → Якутский"),
+        dict(source_l="sa", targ_l="ru", header="Якутский → Русский"),
+        dict(source_l="sa", targ_l="en", header="Якутский → Английский")
+    ]
+    existing_directions = []
+    
+    for direction_dict in directions:
+        direction = direction_dict['header']
+        header_soup = soup.find('h2', string=direction)
+        if not header_soup:
+            print(f"word: {word}, no `{direction}`")
             continue
-        elif tag.name == 'h2':
-            print(f"encountered `<h2>`, ending loop (`{tag.string}`)")
-            break
-        elif tag.name == 'p' or tag.name == 'hr':
-            print(f"encountered `<p>` or `<hr>`, ending loop (`{tag.string}`)")
-            break
-        else:
-            # TODO: сохранять все тэги или сразу убирать словосочетания?
-            rus_word_or_phrase = tag.h3.string.strip()
-            translation = copy.copy(tag.find('div', class_='article-text'))
+        direction_dict.update(dict(header_soup=header_soup))
+        existing_directions.append(direction_dict)
 
-            # add sentinel value to delimit
-            # TODO: may not be needed with copies?
+    # ru_sa_header = soup.find('h2', string="Русский → Якутский")
+    # sa_ru_header = soup.find('h2', string="Якутский → Русский")
+    # sa_en_header = soup.find('h2', string="Якутский → Английский")
 
-            try:
-                lexical_category = tag.find(
-                    'div', class_='article-category').string.split(': ')[1]
-            except (AttributeError) as e:
-                lexical_category = ''
+    # if not header_soup:
+    #     comment = f"нет русского перевода. "
+    #                # f"есть переводы `{','.join(header_soups)}`")
+    #     print(comment)
+    #     res = dict(word=word, translations=[], link=link, comment=comment)
+    #     return res
+    
+    for direction_dict in existing_directions:
+        header_soup = direction_dict['header_soup']
+        
+        for tag in header_soup.next_siblings:
+            if isinstance(tag, NavigableString):
+                continue
+            elif tag.name in ('h2', 'p', 'hr'):
+                print(f"encountered `{tag.name}`, ending loop (`{tag.string}`)")
+                break
+            else:
+                # TODO: сохранять все тэги или сразу убирать словосочетания?
+                # TODO: filtering of words not equal to query should be done here
+                source_word_or_phrase = tag.h3.string.strip()
+                translation = copy.copy(tag.find('div', class_='article-text'))
+    
+                # add sentinel value to delimit
+                # TODO: may not be needed with copies?
+    
+                lexical_category_tag = tag.find('div', class_='article-category')
+                if lexical_category_tag:
+                    lexical_category = lexical_category_tag.string.split(': ')[1]
 
-            word_or_phrase_res = dict(
-                rus=rus_word_or_phrase, translation=translation,
-                lexical_category=lexical_category)
-            translation_tags.append(word_or_phrase_res)
-
+                entry_dict = {k: v for k, v in direction_dict.items()
+                              if k not in ('header', 'header_soup')}
+                entry_dict.update(dict(source=source_word_or_phrase,
+                    translation=translation, lexical_category=lexical_category))
+                translation_tags.append(entry_dict)
+    
     print(f'Successfully parsed `{sakha_link+word}`')
     res = dict(word=word, translations=translation_tags, link=link, comment=comment)
+    
     return res
 
 
@@ -193,7 +213,7 @@ def parse_translation(translation: Translation) -> List[Dict[str, str]]:
 
 
 def get_word_data(word: str):
-    general_info_translations = collect_transl_lexical_entries(word)
+    general_info_translations = collect_lexical_entries(word)
     print(general_info_translations)
 
     entries = []
@@ -207,7 +227,7 @@ def get_word_data(word: str):
 
     return entries
 
-# res = collect_transl_lexical_entries('в')
+# res = collect_lexical_entries('в')
 # print(res)
 #
 # results = []
@@ -240,3 +260,8 @@ def get_word_data(word: str):
 # # entries += get_word_data('к')
 # print(words, entries)
 # write_to_csv(entries)
+
+
+if __name__ == "__main__":
+    collect_lexical_entries()
+    
