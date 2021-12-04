@@ -21,6 +21,8 @@ SAKHA_ALPHABET = _get_sakha_alphabet(lower_only=True, res_container="list")
 LEN_SAKHA_ALPHABET = len(SAKHA_ALPHABET)
 
 VOWELS=r'[аоиуыөүеёэюя]'
+DIGRAPH2ENC = {'дь': 'D', 'нь': 'N'}
+ENC2DIGRAPH = {enc: d for d, enc in DIGRAPH2ENC.items()}
 
 sakhatyla_site = "https://sakhatyla.ru/"
 sakha_suggest_link = sakhatyla_site + "api/articles/suggest?query="
@@ -65,6 +67,20 @@ def get_prefix_json(prefix: str) -> Tuple[List[Dict[str, Union[str, int]]], str]
     return response.json(), link
 
 
+def enc_digraphs(letter):
+    return DIGRAPH2ENC[letter] if letter in DIGRAPH2ENC else letter
+
+
+def dec_digraphs(string):
+    decoded = ''
+    for letter in string:
+        if letter in ENC2DIGRAPH:
+            decoded += ENC2DIGRAPH[letter]
+        else:
+            decoded += letter
+    return decoded
+
+
 def get_next_letter_prefix(
         prefix,
         three_vowels=re.compile(rf'{VOWELS}{3}$', re.M),
@@ -72,23 +88,27 @@ def get_next_letter_prefix(
 ):
     # TODO: understand if it captures everything and how it works with prefixes
     #   that end in "...(н|д)..."
+    # TODO: need to strip punctuation!!!: `густолиственный,`, `грязелечебницам,`, `гребущий;`
     prefix = prefix.strip('=')
+    prefix = prefix.strip(""",-./:;!"#$%&'()*+<>?@[]^_`{|}~\\""")
 
-    if prefix[-2] in ('д', 'н') and prefix[-1] == 'ь':
-        last_char = prefix[-2] + 'ь'
-        prefix_part_kept = prefix[:-2]
-    else:
-        last_char = prefix[-1]
-        prefix_part_kept = prefix[:-1]
+    # if prefix[-2] in ('д', 'н') and prefix[-1] == 'ь':
+    #     last_char = prefix[-2] + 'ь'
+    #     prefix_part_kept = prefix[:-2]
+    # else:
+    #     last_char = prefix[-1]
+    #     prefix_part_kept = prefix[:-1]
 
     # logger.debug(f"prefix is {prefix} (len {len(prefix)}), last char is {last_char} (len {len(last_char)})"
     #              f"last char in alph? {last_char in SAKHA_ALPHABET}. last_char index: ")
+    last_char = prefix[-1]
+    prefix_part_kept = prefix[:-1]
 
-    next_letter_i = SAKHA_ALPHABET.index(last_char)+1
+    next_letter_i = SAKHA_ALPHABET.index(dec_digraphs(last_char)) + 1
     if next_letter_i >= LEN_SAKHA_ALPHABET:
         return None
 
-    proposed_prefix = prefix_part_kept + SAKHA_ALPHABET[next_letter_i]
+    proposed_prefix = prefix_part_kept + enc_digraphs(SAKHA_ALPHABET[next_letter_i])
 
     # heuristics for skipping bad prefixes go here
     # if proposed_prefix[-2] in ('д', 'н') and proposed_prefix[-1] == 'ь'
@@ -113,7 +133,8 @@ def get_new_first_letter_prefix(prefix):
 
 def check_prefix(prefixes_queue):
     prefix = prefixes_queue.pop()
-    items_list, link = get_prefix_json(prefix)
+    dec_prefix = dec_digraphs(prefix)
+    items_list, link = get_prefix_json(dec_prefix)
 
     # no matter whether there are results
     # and if there are whether there is longer prefix to exhaust (below),
@@ -132,8 +153,10 @@ def check_prefix(prefixes_queue):
     if len(words) == NUM_MAX_RES:
         # expression below needed for e.g. `бэйэ`, which is last result
         #   for prefix `бэйэ`
-        last_word = next(word for word in words[::-1] if word != prefix)
-        next_prefix = last_word[:len(prefix) + 1]
+        last_word = next(word for word in words[::-1] if word != dec_prefix)
+        # next_prefix = last_word[:len(prefix) + 1]
+        last_word_new_char = enc_digraphs(last_word[len(dec_prefix)])
+        next_prefix = prefix + last_word_new_char
         prefixes_to_exhaust.append(next_prefix)
 
     return words
@@ -196,8 +219,8 @@ if __name__ == "__main__":
     mode = 'a'
 
     res = {}
-    FIRST_PREF = 'ба'
-    prefixes_next_letter.extend([FIRST_PREF])  # a place to start
+    FIRST_PREF = 'ба'  # продолжение
+    prefixes_next_letter.extend(['гө', 'гоҥ', 'гос', 'горҥ', 'горө', 'горос'])  # a place to start
     logger.info(SAKHA_ALPHABET)
 
     enlist_words(f"words_{FIRST_PREF}-.txt", mode=mode)
