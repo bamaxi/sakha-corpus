@@ -196,7 +196,8 @@ if __name__ == "__main__":
     mode = 'a'
 
     res = {}
-    prefixes_next_letter.extend(['ад', 'аҕп'])  # a place to start
+    FIRST_PREF = 'ба'
+    prefixes_next_letter.extend([FIRST_PREF])  # a place to start
     logger.info(SAKHA_ALPHABET)
 
-    enlist_words("words", mode=mode)
+    enlist_words(f"words_{FIRST_PREF}-.txt", mode=mode)
