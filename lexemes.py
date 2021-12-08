@@ -9,7 +9,7 @@ from bs4 import NavigableString, Tag
 
 from utils import SAKHA_ALPHABET, SAKHAONLY_LETTERS, RUS_ALPHABET
 
-logging.config.fileConfig('logging.conf')
+logging.config.fileConfig('logging_lexemes.conf', disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
 
@@ -190,6 +190,8 @@ class TokenStream:
         self.unknown = object()
         self.current = None
 
+        self.tok_i = 0  # to later restore spaces properly
+
         self.filters = []
         if skip_space:
             self.filters.append(IsWhitespace())
@@ -244,10 +246,15 @@ class TokenStream:
         else:
             logger.debug(f"arabic_number string `{string}` not matched fully by regex pattern")
             tok = dict(type='number', kind="arabic", valid=False, value=string)
-        if self.inp.peek() == '.':
+
+        next_char = self.inp.peek()
+        if next_char == '.':
             logger.debug(f"\tchecking dot")
             self.inp.next()
             tok['dotted'] = True
+        elif next_char == ')':
+            self.inp.next()
+            tok['bracketed'] = True
 
         return tok
 
@@ -284,9 +291,11 @@ class TokenStream:
 
     def read_next_keep_space(self):
         inp = self.inp
-        ch_or_tag = inp.peek()
-        if ch_or_tag is None:
+        if inp.eof():
             return None
+
+        ch_or_tag = inp.peek()
+        self.tok_i += 1
 
         logger.debug(f"ch_or_tag is `{ch_or_tag}`, current is `{self.current}`")
         # TODO: if or else if?
@@ -336,10 +345,15 @@ class TokenStream:
     def read_next_filt(self):
         tok = self.read_next_keep_space()
         if not self.filters:
+            if tok:
+                tok['i'] = self.tok_i
             return tok
 
         while any(filt.match(tok) for filt in self.filters):
             tok = self.read_next_keep_space()
+
+        if tok:
+            tok['i'] = self.tok_i
 
         self.remove_consumed_filters()
 
@@ -367,8 +381,20 @@ class TokenStream:
 
 def compose_predicates_or(*predicates):
     def is_any():
+        # res = []
+        # for predicate in predicates:
+        #     p_res = predicate()
+        #     logger.debug(f"trying {predicate.__name__}, res: {p_res}")
+        #     res.append(p_res)
+        # return any(res)
         return any(predicate() for predicate in predicates)
     return is_any
+
+
+def get_subarray_of(arr):
+    l = []
+    arr.append(l)
+    return l
 
 
 class Parser:
@@ -385,13 +411,14 @@ class Parser:
             tok = self.inp.peek()
         return bool(tok) and tok['type'] == 'whitespace'
 
-    def is_number(self, kind=None, value=None, dotted=None, tok=None):
+    def is_number(self, kind=None, value=None, dotted=None, bracketed=None, tok=None):
         if not tok:
             tok = self.inp.peek()
         return (bool(tok) and tok['type'] == "number"
                 and (not kind or tok['kind'] == kind)
                 and (not value or tok['value'] == value)
-                and (not dotted or tok.get('dotted') == dotted))
+                and (not dotted or tok.get('dotted') == dotted)
+                and (not bracketed or tok.get('bracketed') == bracketed))
 
     def is_tag(self, tag_value=None, tag_kind=None, tok=None):
         if not tok:
@@ -421,8 +448,8 @@ class Parser:
         else:
             self.inp.croak(f"Expecting whitespace")
 
-    def skip_number(self, kind=None, dotted=None):
-        if self.is_number(kind, dotted=dotted):
+    def skip_number(self, kind=None, dotted=None, bracketed=None):
+        if self.is_number(kind, dotted=dotted, bracketed=bracketed):
             self.inp.next()
         else:
             self.inp.croak(f"Expecting number")
@@ -462,29 +489,22 @@ class Parser:
         # TODO: tag reliance here currently
         #   note: in sa-ru sah example is strong and russian normal
 
-        def get_subarray_of(arr):
-            l = []
-            arr.append(l)
-            return l
-
         ru_example = []
         sa_example = []
         sa_ru_example = []
         open_tag = None
         array = None
         cur_array = None  # TODO: better changed to source / targ for generality later
-        # while not inp.eof():
         while self.is_word() or self.is_punc(',') or self.is_tag('strong'):
             # TODO:
             if self.is_tag('strong', '<'):
                 if self.maybe_error(lambda: self.skip_tag('strong', '<'), self.is_word):
                     self.inp.add_tag_filter(type='tag', value='strong', kind='>')
-                    # self.inp.tok_to_skip = dict(type='tag', value='strong', kind='>')
                     break
 
                 if not open_tag:
                     open_tag = True
-                    array = ru_example # change array
+                    array = ru_example  # change array
                     cur_array = 'ru'
                 else:
                     inp.croak(f"Unexpected tag: `{inp.peek()}`. <strong> already open")
@@ -525,7 +545,6 @@ class Parser:
             if sa_ru_example:
                 res.update(dict(sa_ru_example=sa_ru_example))
             else:
-                # inp.croak("No results to show")
                 return None
 
         return res
@@ -548,8 +567,7 @@ class Parser:
             if first:
                 first = False
             else:
-                # TODO: `;` before next number at the end of numbered example is skipped too
-                #  looks like it is only remedied by parser
+                # `;` before next number at the end of numbered example is skipped too
                 self.skip_punc(separator)
 
             parse = parser()
@@ -560,16 +578,27 @@ class Parser:
             self.skip_punc(stop_punc)
         return a
 
+    def parse_translations(self, delim=None, parser=None, stop_cond_func=None):
+        delim = delim or ';'
+        stop_cond_func = stop_cond_func or compose_predicates_or(
+            self.is_number, lambda: self.is_punc('.'), lambda: self.is_tag('p')
+        )
+        parser = parser or self.parse_words
+        return self.parse_delimited(
+            None, delim, parser, stop_cond_func=stop_cond_func)
+
     def maybe_orphan(self, is_orphan_cond, fut_parent_struct,
                      not_orphan_cond, not_orphan_struct):
         """checks whether what is being read now can be included in the bigger
            struct further right"""
         array = []
-        while not any((is_orphan_cond(), not_orphan_cond())):
+        while not self.inp.eof() and not any((is_orphan_cond(), not_orphan_cond())):
             array.append(self.inp.next())
         if is_orphan_cond():
             fut_parent_struct.extend(array)
         elif not_orphan_cond():
+            not_orphan_struct.extend(array)
+        else:  # TODO: this is for entry end (`.` / `<p>`), need to reformulate?
             not_orphan_struct.extend(array)
 
     def parse_numbered_sense(self):
@@ -578,15 +607,13 @@ class Parser:
         gram_desc_ru = numbered_sense.setdefault('gram_desc_ru', [])
         sah_sense_translations = numbered_sense.setdefault('sah_sense_translations', [])
 
-        # TODO: that belongs higher up
-        # if self.is_punc('('):
-        #     # TODO: what parser to choose? perhaps need something simple for words
-        #     synonyms = self.parse_delimited('(', ')', ',', self.parse_word)
-        #     numbered_sense["synonyms"] = synonyms
         if self.is_word():
             # TODO: if there is no strong then translation could be in `()`
             #   do we need to take that into account here or later?
             #   option: pass self.is_punc('(') and sa_example
+
+            # TODO: can account for the above and sa source like ааҕааччы by
+            #
             self.maybe_orphan(
                 lambda: self.is_tag('em', '<'), gram_desc_ru,
                 self.is_number, sah_sense_translations
@@ -597,29 +624,28 @@ class Parser:
             self.skip_tag('em', '<')
             # TODO: language choice should be made here
             #  or rather type should be simply 'gram_desc' with no lang
-            while not inp.eof():
-                if self.is_tag('em', '>'):
-                    break
+
+            # TODO: perhaps `;` could be alternative loop breaker
+            while not inp.eof() and not self.is_tag('em', '>'):
                 gram_desc_ru.append(inp.next())
             self.skip_tag('em', '>')
 
             # optionaly there can be translation, usually with affix, represented as =...
             if not self.is_punc(';'):
-                # TODO: the separator here often (always?) isn't `,`, it's `;`
-                #  possible solution: allow passing function for `stop` and pass
-                #   `self.is_number` or composion of `self.is_tag`` and `self.is_number`
+                def is_lex_transl_end(): return self.is_punc(';')
+                def is_sa_desc_beginning(): return self.is_tag('em')
+                # created this to account for last part in аабылаан
+                def is_example_end(): return self.is_punc('.')
 
-                # TODO: another problem: after translation there could be
-                #   (what?? grammar explanation in target lang?) in ()
                 sa_transl = self.parse_delimited(None, ',', self.parse_word,
-                    # stop_punc_list=[';', '(']
                     stop_cond_func=compose_predicates_or(
-                        lambda: self.is_punc(';'), lambda: self.is_tag('em')
+                        is_lex_transl_end, is_sa_desc_beginning, is_example_end
                     )
                 )
-                if self.is_punc(';'):
+                if is_lex_transl_end():
                     self.skip_punc()
-                elif self.is_tag('em'):
+                elif is_sa_desc_beginning():
+                    # some strange comments in sakha (when source = 'ru')
                     gram_desc_sa = []
                     self.skip_tag('em')
                     while not inp.eof():
@@ -638,9 +664,7 @@ class Parser:
                 numbered_sense['sah_transl'] = sa_transl
 
         # word translation
-        # if self.is_whitespace():
         if not self.is_punc(';'):
-            # self.skip_whitespace()
             # TODO: <strong> in в.9 messes is_number checking
             #   one idea: prevent parse_delimited from consuming `;` which isn't separator
             #   but is actual stop. But that was the solution to its indistinguishability
@@ -648,11 +672,7 @@ class Parser:
             #   possible solution: split `parse_words` into smaller functions
             #   and use maybe_stop in `parse_delimited`, and if it's not stop just parse it
             #     this it tied to another TODO: pass mutable dicts and lists and add on the go
-            sah_sense_translations.extend(self.parse_delimited(
-                None, ';', self.parse_words, stop_cond_func=compose_predicates_or(
-                        self.is_number, lambda: self.is_punc('.'), lambda: self.is_tag('p')
-                    )
-                ))
+            sah_sense_translations.extend(self.parse_translations())
 
         return numbered_sense
 
@@ -660,7 +680,6 @@ class Parser:
             self, func_to_consume, is_next_tok_proper,
             # *func_to_consume_args, **func_to_consume_kwargs
     ):
-        # if
         func_to_consume()
         if not is_next_tok_proper():
             return True
@@ -684,14 +703,15 @@ class Parser:
 
         inp.croak("Unexpected token")
 
-    def parse_sense(self):
+    def parse_homonym(self):
         return self.parse_atom()
 
-    # TODO: we are peeking too many times with all these functions, once is enough
-    #   they can be changed to optionally accept tag
     def parse_atom(self):
         inp = self.inp
         tok = inp.peek()
+
+        if self.is_word(tok=tok):
+            return dict(type="sah_ru_examples", value=self.parse_translations())
 
         if self.is_tag('em', '<', tok=tok):
             self.skip_tag('em', '<')
@@ -701,28 +721,29 @@ class Parser:
         elif self.is_tag(tok=tok):
             # TODO: decide what to do with tags
             print(f"cur tok is tag: {tok}")
-            # self.inp.tok_to_skip = dict(type="tag", value=inp.next()['value'])
             self.inp.add_tag_filter(type='tag', value=inp.next()['value'])
             return None
 
-        if self.is_number(tok=tok):
-            if self.is_number(kind='arabic', dotted=True, tok=tok):
-                # TODO: logging example number could be done here
-                #   e.g. `parse_numbered_sense` fails (then we take all till next number or <p> tag)
-                num = inp.next()['value']
-                # if hasattr(inp, "tok_to_skip"):
-                #     print(f"attr value: {inp.tok_to_skip}, next el would be {inp.peek()}")
-                # else:
-                #     print(f"no attr `tok_to_skip`, next el would be {inp.peek()}")
-                numbered_sense = {'type': 'numbered_sense', 'num': num}
-                # TODO: the problem with `</strong>` after 9 is that conditions in
-                #   `parse_numbered_sense` don't match
-                #   we need to skip
-                numbered_sense.update(self.parse_numbered_sense())
-                return numbered_sense
-            elif self.is_number(kind='roman', tok=tok):
-                self.skip_number()
-                return dict(type="sense", value=self.parse_sense())
+        if self.is_number(kind='arabic', dotted=True, tok=tok):
+            # TODO: logging example number could be done here
+            #   e.g. `parse_numbered_sense` fails (then we take all till next number or <p> tag)
+            num = inp.next()['value']
+            numbered_sense = {'type': 'numbered_sense', 'num': num}
+            # TODO: the problem with `</strong>` after 9 is that conditions in
+            #   `parse_numbered_sense` don't match
+            #   we need to skip
+            numbered_sense.update(self.parse_numbered_sense())
+            return numbered_sense
+
+        if self.is_number(kind='arabic', bracketed=True, tok=tok):
+            num = inp.next()['value']
+            numbered_sense = {'type': 'numbered_sense', 'num': num}
+            numbered_sense.update(self.parse_numbered_sense())
+            return numbered_sense
+
+        if self.is_number(kind='roman', tok=tok):
+            return dict(type="homonym", num=inp.next()['value'],
+                        value=self.parse_homonym())
 
         if self.is_punc('(', tok=tok):
             synonyms = self.parse_delimited('(', ',', self.parse_word, stop_punc=')')
@@ -734,10 +755,59 @@ class Parser:
         """parses <div> - the whole lexeme entry"""
         inp = self.inp
         entry = []
-        while inp and not inp.eof():
+        # entry = dict(type='entry')
+        while not inp.eof():
             atom_parse = self.parse_atom()
             logger.info(f"one atom: {atom_parse}")
-            # if atom_parse:
-            entry.append(atom_parse)
+            if atom_parse:
+                entry.append(atom_parse)
+                # if atom_parse['type'] in ('pos'):  # or 'gram_desc_ru' ?
+                #     break
+            # self.parse_atom(entry)
         logger.info(entry)
         return dict(type='entry', value=entry)
+
+
+# TODO: this doesn't really work in a lot of cases
+def join_tok_punc_aware(tok_list):
+    s = tok_list[0]['value']
+    print(tok_list)
+    for j, tok in enumerate(tok_list[1:], start=1):
+        if tok["i"] - tok_list[j-1]["i"] > 1:
+            s += ' '
+        s += tok['value']
+    return s
+
+
+def prettify_out(out):
+    if isinstance(out, (str, int)):
+        return out
+
+    if isinstance(out, dict):
+        d = {}
+        for k, v in out.items():
+            d[k] = prettify_out(v)
+        return d
+
+    if isinstance(out, list):
+        l = []
+        if out:
+            if all(isinstance(el, dict) and el.get('type') in ('word', 'punc')
+                   for el in out):
+                return join_tok_punc_aware(out)
+
+            for el in out:
+                l.append(prettify_out(el))
+        return l
+
+
+def parse(entry_div: Tag, prettify=True):
+    inp_s = InputStream(entry_div)
+    tok_inp_s = TokenStream(inp_s)
+    parser = Parser(tok_inp_s)
+
+    result = parser.parse_entry()
+    if prettify:
+        result = prettify_out(result)
+
+    return result
