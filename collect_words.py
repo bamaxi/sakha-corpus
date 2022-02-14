@@ -24,6 +24,8 @@ VOWELS=r'[аоиуыөүеёэюя]'
 DIGRAPH2ENC = {'дь': 'D', 'нь': 'N'}
 ENC2DIGRAPH = {enc: d for d, enc in DIGRAPH2ENC.items()}
 
+PARSED = {}
+
 sakhatyla_site = "https://sakhatyla.ru/"
 sakha_suggest_link = sakhatyla_site + "api/articles/suggest?query="
 
@@ -67,8 +69,30 @@ def get_prefix_json(prefix: str) -> Tuple[List[Dict[str, Union[str, int]]], str]
     return response.json(), link
 
 
-def enc_digraphs(letter):
-    return DIGRAPH2ENC[letter] if letter in DIGRAPH2ENC else letter
+def strip_punc(s):
+    return s.strip("""=!"#$%&'()*+,-./:;<>?@[]^_`{|}~—\\""")
+
+
+def extend_prefix(prefix, last_word, possible_new_char_i):
+    logger.debug(f"`{prefix}` {last_word} {possible_new_char_i}")
+    last_word = strip_punc(last_word)
+    if possible_new_char_i >= len(last_word):
+        return None
+    last_word_new_char = last_word[possible_new_char_i]
+    next_prefix = prefix + last_word_new_char
+    # next_prefix = prefix + enc_digraphs(last_word_new_char)
+    while last_word_new_char not in SAKHA_ALPHABET:
+        possible_new_char_i += 1
+        if possible_new_char_i >= len(last_word):
+            return None
+        last_word_new_char = last_word[possible_new_char_i]
+        next_prefix += last_word_new_char
+
+    return enc_digraphs(next_prefix)
+
+
+def enc_digraphs(letters):
+    return DIGRAPH2ENC[letters] if letters in DIGRAPH2ENC else letters
 
 
 def dec_digraphs(string):
@@ -124,9 +148,14 @@ def get_next_letter_prefix(
 
 
 def get_new_first_letter_prefix(prefix):
-    next_letter_i = SAKHA_ALPHABET.index(prefix[0])+1
+    if prefix[0:2] in DIGRAPH2ENC:
+        next_letter_i = SAKHA_ALPHABET.index(prefix[0:2]) + 1
+    else:
+        next_letter_i = SAKHA_ALPHABET.index(prefix[0])+1
+
     if next_letter_i >= LEN_SAKHA_ALPHABET:
         return None
+
     # it appears search is only performed with len >= 2 prefixes
     return SAKHA_ALPHABET[next_letter_i] + "а"
 
@@ -139,7 +168,12 @@ def check_prefix(prefixes_queue):
     # no matter whether there are results
     # and if there are whether there is longer prefix to exhaust (below),
     # we should check prefix with last letter changed to the next in the alphabet
-    append_not_none(prefixes_next_letter, get_next_letter_prefix(prefix))
+    next_letter_prefix = get_next_letter_prefix(prefix)
+    if next_letter_prefix not in PARSED:
+        append_not_none(prefixes_next_letter, next_letter_prefix)
+        PARSED[next_letter_prefix] = None
+    elif next_letter_prefix:
+        logger.debug(f"skipping NL `{next_letter_prefix}`")
 
     if not items_list:
         return None
@@ -153,11 +187,17 @@ def check_prefix(prefixes_queue):
     if len(words) == NUM_MAX_RES:
         # expression below needed for e.g. `бэйэ`, which is last result
         #   for prefix `бэйэ`
-        last_word = next(word for word in words[::-1] if word != dec_prefix)
+        last_word = next(word for word in words[::-1] if strip_punc(word) != dec_prefix)
         # next_prefix = last_word[:len(prefix) + 1]
-        last_word_new_char = enc_digraphs(last_word[len(dec_prefix)])
-        next_prefix = prefix + last_word_new_char
-        prefixes_to_exhaust.append(next_prefix)
+
+        next_prefix = extend_prefix(dec_prefix, last_word, len(dec_prefix))
+        # last_word_new_char = enc_digraphs(last_word[len(dec_prefix)])
+        # next_prefix = prefix + last_word_new_char
+        if next_prefix and next_prefix not in PARSED:
+            prefixes_to_exhaust.append(next_prefix)
+            PARSED[next_prefix] = None
+        elif next_prefix:
+            logger.debug(f"skipping EXH `{next_prefix}`")
 
     return words
 
@@ -220,7 +260,8 @@ if __name__ == "__main__":
 
     res = {}
     FIRST_PREF = 'ба'  # продолжение
-    prefixes_next_letter.extend(['гө', 'гоҥ', 'гос', 'горҥ', 'горө', 'горос'])  # a place to start
+    # prefixes_next_letter.extend(['дя'])  # a place to start
+    prefixes_next_letter.extend(['ущ', 'ушт'])  # a place to start
     logger.info(SAKHA_ALPHABET)
 
     enlist_words(f"words_{FIRST_PREF}-.txt", mode=mode)

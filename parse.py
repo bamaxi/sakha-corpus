@@ -1,5 +1,6 @@
 from typing import List, Dict, Union, Tuple
 import csv
+import json
 import re
 import copy
 from pathlib import Path
@@ -8,7 +9,16 @@ import requests
 from bs4 import BeautifulSoup
 from bs4 import NavigableString, Tag
 
-from utils import HEADERS, write_to_csv
+from lexemes import parse
+from utils import HEADERS, write_to_csv, random_delay_adder
+
+# parse = random_delay_adder(1, 1.5)(parse)
+
+import logging
+import logging.config
+
+logging.config.fileConfig('logging_parse.conf', disable_existing_loggers=False)
+logger = logging.getLogger(__name__)
 
 sakhatyla_site = "https://sakhatyla.ru/"
 sakha_link = sakhatyla_site + "translate?q="
@@ -22,6 +32,12 @@ session.headers.update(HEADERS)
 #     TODO
 
 Translation = Dict[str, Union[str, Tag]]
+
+PARSED = dict()
+
+
+def enc_non_alpha(s):
+    return ''.join((char.isalpha() and char) or requests.utils.quote(char) for char in s)
 
 
 def get_word_page(word: str) -> Tuple[str]:
@@ -42,13 +58,19 @@ def save_page(page: str, word: str, folder="sakhatyla.ru"):
 
 
 def collect_lexical_entries(
-        word: str, link: str, path: Path = None
+        word: str, path: Path = None,
+        folder="sakhatyla"
 ) -> Dict[str, Union[str, List[Translation]]]:
-    if not path:
-        page, _, _, _ = get_word_page(word)
+    enc_word = enc_non_alpha(word)
+    path = Path(f"{folder}/{enc_word}")
+    if not path.exists():
+        page, link, _, _ = get_word_page(word)
+        save_page(page, enc_word, folder=folder)
+        logger.debug(f"saved `{word}` html in {folder}")
     else:
         with open(path, 'r', encoding = 'utf-8') as f:
             page = f.read()
+            link = sakha_link + word
 
     soup = BeautifulSoup(page, 'lxml')
 
@@ -69,7 +91,7 @@ def collect_lexical_entries(
         direction = direction_dict['header']
         header_soup = soup.find('h2', string=direction)
         if not header_soup:
-            print(f"word: {word}, no `{direction}`")
+            logger.debug(f"word: {word}, no `{direction}`")
             continue
         direction_dict.update(dict(header_soup=header_soup))
         existing_directions.append(direction_dict)
@@ -104,6 +126,7 @@ def collect_lexical_entries(
                 # TODO: may not be needed with copies?
     
                 lexical_category_tag = tag.find('div', class_='article-category')
+                lexical_category = ''
                 if lexical_category_tag:
                     lexical_category = lexical_category_tag.string.split(': ')[1]
 
@@ -113,7 +136,7 @@ def collect_lexical_entries(
                     translation=translation, lexical_category=lexical_category))
                 translation_tags.append(entry_dict)
     
-    print(f'Successfully parsed `{sakha_link+word}`')
+    logger.debug(f'Successfully parsed `{sakha_link+word}`')
     res = dict(word=word, translations=translation_tags, link=link, comment=comment)
     
     return res
@@ -212,56 +235,46 @@ def parse_translation(translation: Translation) -> List[Dict[str, str]]:
     return res
 
 
-def get_word_data(word: str):
-    general_info_translations = collect_lexical_entries(word)
-    print(general_info_translations)
+def parse_word_results(word: str, results: List[Dict[str, str]]):
+    word_res = collect_lexical_entries(word)
 
-    entries = []
-    for translations in general_info_translations.pop('translations'):
-        entry_data = parse_translation(translations)
-        entries.extend(entry_data)
+    for i, entry in enumerate(word_res['translations']):
+        # TODO: check if entry['source'] == word ?
+        entry_title = entry['source']
+        logger.debug(f"word `{word}` entry {i} ({entry_title}),"
+                     f"link: {sakha_link + requests.utils.quote(word)}")
+        if entry_title in PARSED:
+            logger.info(f"skipping {entry_title} (already parsed)")
+            continue
+        if entry['source_l'] == 'sa' and entry['targ_l'] == 'ru':
+            if entry['source'][-1] == "=":
+                entry['eq_pos'] = "V"
 
-    # добавить общую информацию к каждому слову для записи позже в csv
-    for entry_dict in entries:
-        entry_dict.update(general_info_translations)
+            res_d = {}
+            res_d.update(entry)
 
-    return entries
+            try:
+                res_d['translation'] = parse(entry['translation'], prettify=True)
+            except (ValueError, AttributeError, TypeError) as e:
+                logger.error(e)
+                res_d['error'] = e
 
-# res = collect_lexical_entries('в')
-# print(res)
-#
-# results = []
-# for translations in res['translations']:
-#     entry_data = parse_translation(translations)
+            results.append(res_d)
 
-# N = 2
-# with open('ru_words.txt', 'r', encoding='utf-8') as f:
-#     words = [next(f).strip() for i in range(N)]
+            logger.debug(f"result is {res_d}")
 
-
-# with open('ru_words.txt', 'r', encoding='utf-8') as f:
-#     words = f.read().split('\n')
-
-
-# for word in words:
-#     page, link, word_link, word = get_word_page(word)
-#     save_page(page, word)
-
-#
-# entries = []
-# for word in words:
-#     try:
-#         entry = get_word_data(word)
-#         entries.extend(entry)
-#     except (AttributeError, ValueError) as e:
-#         print(e)
-#
-# # entries = get_word_data('в')
-# # entries += get_word_data('к')
-# print(words, entries)
-# write_to_csv(entries)
+        PARSED[entry_title] = None
+        with open("res.json", 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=2, default=str)
 
 
 if __name__ == "__main__":
-    collect_lexical_entries()
-    
+    # filename = "collect_words/words.txt"
+    filename = "words_full.txt"
+    with open(filename, 'r', encoding='utf-8') as f:
+        words = f.read().split('\n')
+
+    results = []
+    met_start = False
+    for word in words:
+        parse_word_results(word, results)
